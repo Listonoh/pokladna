@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/posDatabase';
 import { posService } from '../../domain/posService';
-import { Product, Order, OrderItem, PaymentMethod } from '../../domain/types';
+import { Product, Order, OrderItem, PaymentMethod, PaymentItemDetail } from '../../domain/types';
 import { formatCents, calculateOrder } from '../../domain/calculations';
 import { PaymentModal } from './PaymentModal';
 import { ItemNoteModal } from './ItemNoteModal';
@@ -17,6 +17,7 @@ import {
   Coffee,
   Check,
   Clock,
+  Heart,
 } from 'lucide-react';
 
 export const PosView: React.FC = () => {
@@ -79,10 +80,14 @@ export const PosView: React.FC = () => {
     await posService.addItemToOrder(currentOrder.id, product, 1);
   };
 
-  // Zpracování platby
-  const handleConfirmPayment = async (amountCents: number, method: PaymentMethod) => {
+  // Zpracování platby s dýškem
+  const handleConfirmPayment = async (
+    amountCents: number,
+    method: PaymentMethod,
+    options: { tipAmountCents: number; paidItems: PaymentItemDetail[] }
+  ) => {
     if (!currentOrder) return;
-    await posService.recordPayment(currentOrder.id, amountCents, method);
+    await posService.recordPayment(currentOrder.id, amountCents, method, options);
 
     // Pokud je objednávka zaplacena, načteme znovu aktuální stav
     const updated = await db.orders.get(currentOrder.id);
@@ -114,7 +119,7 @@ export const PosView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-61px)] overflow-hidden bg-parchment-100">
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-parchment-100">
       {/* 1. Horní lišta stolů */}
       <div className="bg-parchment-200/90 border-b border-parchment-300 px-4 py-2 overflow-x-auto flex items-center space-x-2 shrink-0">
         {/* Tlačítko S sebou */}
@@ -161,9 +166,9 @@ export const PosView: React.FC = () => {
       </div>
 
       {/* 2. Hlavní plocha: Nabídka (Vlevo) + Účet (Vpravo) */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* LEVÝ PANEL: Nabídka produktů */}
-        <div className="flex-1 flex flex-col p-4 overflow-y-auto space-y-4">
+        <div className="flex-1 flex flex-col p-4 overflow-y-auto space-y-4 min-h-0">
           {/* Oblíbené produkty (Rychlá mřížka) */}
           {favoriteProducts.length > 0 && (
             <div>
@@ -248,9 +253,9 @@ export const PosView: React.FC = () => {
         </div>
 
         {/* PRAVÝ PANEL: Aktuální účet stolu */}
-        <div className="w-[380px] lg:w-[420px] bg-white border-l border-parchment-300 flex flex-col shadow-lg shrink-0">
+        <div className="w-[380px] lg:w-[420px] bg-white border-l border-parchment-300 flex flex-col shadow-lg shrink-0 min-h-0">
           {/* Hlavička účtu */}
-          <div className="p-4 bg-parchment-100 border-b border-parchment-300 flex items-center justify-between">
+          <div className="p-4 bg-parchment-100 border-b border-parchment-300 flex items-center justify-between shrink-0">
             <div>
               <h2 className="font-bold text-base text-ink-900 leading-tight">
                 {tableNameDisplay}
@@ -267,7 +272,7 @@ export const PosView: React.FC = () => {
           </div>
 
           {/* Seznam položek účtu */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
             {currentItems.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-ink-400 p-6 text-center">
                 <Coffee className="w-12 h-12 text-parchment-400 mb-2" />
@@ -279,6 +284,8 @@ export const PosView: React.FC = () => {
             ) : (
               currentItems.map((item) => {
                 const itemTotal = item.unit_price_cents_snapshot * item.quantity;
+                const isPartiallyPaid = (item.paid_quantity || 0) > 0;
+
                 return (
                   <div
                     key={item.id}
@@ -289,9 +296,14 @@ export const PosView: React.FC = () => {
                         <span className="font-semibold text-sm text-ink-900 leading-tight block">
                           {item.product_name_snapshot}
                         </span>
-                        <span className="text-xs text-ink-500 font-mono">
-                          {formatCents(item.unit_price_cents_snapshot)} / ks
-                        </span>
+                        <div className="flex items-center gap-2 text-xs text-ink-500 font-mono">
+                          <span>{formatCents(item.unit_price_cents_snapshot)} / ks</span>
+                          {isPartiallyPaid && (
+                            <span className="text-tea-700 font-semibold bg-tea-100 px-1.5 py-0.2 rounded">
+                              Uhrazeno {item.paid_quantity}/{item.quantity} ks
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <span className="font-bold text-sm text-ink-900">
                         {formatCents(itemTotal)}
@@ -369,7 +381,7 @@ export const PosView: React.FC = () => {
           </div>
 
           {/* Finanční rekapitulace a tlačítko k platbě */}
-          <div className="p-4 bg-parchment-100 border-t border-parchment-300 space-y-3">
+          <div className="p-4 bg-parchment-100 border-t border-parchment-300 space-y-3 shrink-0">
             <div className="space-y-1.5 text-xs text-ink-600">
               <div className="flex justify-between">
                 <span>Hodnota položek:</span>
@@ -377,12 +389,20 @@ export const PosView: React.FC = () => {
               </div>
               {calc.paidCents > 0 && (
                 <div className="flex justify-between text-tea-700">
-                  <span>Již uhrazeno:</span>
+                  <span>Již uhrazeno za zboží:</span>
                   <span className="font-semibold">-{formatCents(calc.paidCents)}</span>
                 </div>
               )}
+              {calc.totalTipsCents > 0 && (
+                <div className="flex justify-between text-amberGold-600">
+                  <span className="flex items-center gap-1">
+                    <Heart className="w-3 h-3" /> Spropitné k účtu:
+                  </span>
+                  <span className="font-semibold">+{formatCents(calc.totalTipsCents)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm font-bold text-ink-900 pt-1 border-t border-parchment-300">
-                <span>Zbývá k úhradě:</span>
+                <span>Zbývá k úhradě za zboží:</span>
                 <span className="text-base text-tea-800">{formatCents(calc.remainingCents)}</span>
               </div>
             </div>
@@ -395,7 +415,7 @@ export const PosView: React.FC = () => {
                 className="w-full py-3.5 bg-tea-600 text-white rounded-xl font-bold text-base shadow-md hover:bg-tea-700 active:scale-[0.98] transition-all flex items-center justify-center space-x-2"
               >
                 <CreditCard className="w-5 h-5" />
-                <span>Zaplatit ({formatCents(calc.remainingCents)})</span>
+                <span>Zaplatit vybrané položky / dýško</span>
               </button>
             ) : calc.totalCents > 0 ? (
               <button
@@ -409,7 +429,7 @@ export const PosView: React.FC = () => {
                 className="w-full py-3 bg-tea-700 text-white rounded-xl font-bold text-sm shadow hover:bg-tea-800 transition-all flex items-center justify-center space-x-2"
               >
                 <UserCheck className="w-4 h-4" />
-                <span>Účet uhrazen • Založit nový pro stůl</span>
+                <span>Účet plně uhrazen • Založit nový pro stůl</span>
               </button>
             ) : null}
           </div>
@@ -426,6 +446,7 @@ export const PosView: React.FC = () => {
           totalCents={calc.totalCents}
           paidCents={calc.paidCents}
           remainingCents={calc.remainingCents}
+          unpaidItems={currentItems}
           onConfirmPayment={handleConfirmPayment}
         />
       )}

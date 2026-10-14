@@ -73,9 +73,9 @@ export const AdminView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-61px)] overflow-y-auto bg-parchment-100 p-6 select-none space-y-6">
+    <div className="flex-1 min-h-0 overflow-y-auto bg-parchment-100 p-4 sm:p-6 space-y-6 pb-16 select-none">
       {/* Hlavička */}
-      <div className="flex items-center justify-between bg-white p-5 rounded-2xl border border-parchment-300 shadow-sm">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-2xl border border-parchment-300 shadow-sm shrink-0">
         <div>
           <h2 className="text-xl font-bold text-ink-900 tracking-tight">Správa nabídky a číselníků</h2>
           <p className="text-xs text-ink-500 mt-0.5">
@@ -86,7 +86,7 @@ export const AdminView: React.FC = () => {
         <button
           type="button"
           onClick={handleOpenNewProduct}
-          className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-tea-600 text-white font-bold text-sm shadow hover:bg-tea-700 active:scale-95 transition-all"
+          className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-tea-600 text-white font-bold text-sm shadow hover:bg-tea-700 active:scale-95 transition-all shrink-0 self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
           <span>Přidat nový produkt</span>
@@ -99,16 +99,16 @@ export const AdminView: React.FC = () => {
           <h3 className="font-bold text-sm text-ink-800">
             Seznam produktů ({products.length})
           </h3>
-          <span className="text-xs text-ink-500">
+          <span className="text-xs text-ink-500 hidden sm:inline">
             Změna ceny neovlivňuje dřívější vytvořené a zaplacené účty.
           </span>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-sm">
+          <table className="w-full text-left border-collapse text-sm min-w-[600px]">
             <thead>
               <tr className="bg-parchment-100/60 border-b border-parchment-200 text-xs font-semibold text-ink-500 uppercase">
-                <th className="py-3 px-4">Oblíbené</th>
+                <th className="py-3 px-4 w-12 text-center">Oblíbené</th>
                 <th className="py-3 px-4">Název</th>
                 <th className="py-3 px-4">Kategorie</th>
                 <th className="py-3 px-4">Prodejní cena</th>
@@ -126,7 +126,7 @@ export const AdminView: React.FC = () => {
                       !p.is_active ? 'opacity-50 bg-parchment-100/40' : ''
                     }`}
                   >
-                    <td className="py-3 px-4">
+                    <td className="py-3 px-4 text-center">
                       <button
                         type="button"
                         onClick={() => handleToggleFavorite(p)}
@@ -207,10 +207,11 @@ export const AdminView: React.FC = () => {
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-ink-700 uppercase mb-1">
+                <label htmlFor="productNameInput" className="block text-xs font-bold text-ink-700 uppercase mb-1">
                   Název produktu
                 </label>
                 <input
+                  id="productNameInput"
                   type="text"
                   value={editingProduct.name || ''}
                   onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
@@ -220,10 +221,11 @@ export const AdminView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-ink-700 uppercase mb-1">
+                <label htmlFor="categorySelect" className="block text-xs font-bold text-ink-700 uppercase mb-1">
                   Kategorie
                 </label>
                 <select
+                  id="categorySelect"
                   value={editingProduct.category_id || ''}
                   onChange={(e) =>
                     setEditingProduct({ ...editingProduct, category_id: e.target.value })
@@ -239,10 +241,11 @@ export const AdminView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-ink-700 uppercase mb-1">
+                <label htmlFor="productPriceInput" className="block text-xs font-bold text-ink-700 uppercase mb-1">
                   Prodejní cena v Kč (uloží se v haléřích)
                 </label>
                 <input
+                  id="productPriceInput"
                   type="number"
                   step="1"
                   min="0"

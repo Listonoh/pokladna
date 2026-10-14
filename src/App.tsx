@@ -30,7 +30,7 @@ export const App: React.FC = () => {
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-parchment-100">
       <Header activeTab={activeTab} onTabChange={setActiveTab} />
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {activeTab === 'pos' && <PosView />}
         {activeTab === 'delivery' && <DeliveryView />}
         {activeTab === 'reports' && <ReportsView />}

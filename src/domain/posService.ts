@@ -8,6 +8,7 @@ import {
   PaymentEvent,
   Product,
   PaymentMethod,
+  PaymentItemDetail,
 } from './types';
 import { calculateOrder, validatePaymentAmount } from './calculations';
 
@@ -32,6 +33,12 @@ export function generateOrderNumber(existingCountToday: number): string {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const seq = String(existingCountToday + 1).padStart(3, '0');
   return `${today}-${seq}`;
+}
+
+export interface RecordPaymentOptions {
+  tipAmountCents?: number;
+  customIdempotencyId?: string;
+  paidItems?: PaymentItemDetail[];
 }
 
 export class PosService {
@@ -117,6 +124,7 @@ export class PosService {
       product_name_snapshot: product.name,
       unit_price_cents_snapshot: product.price_cents,
       quantity,
+      paid_quantity: 0,
       note: normalizedNote,
       delivery_status: 'pending',
       delivered_at: null,
@@ -270,15 +278,24 @@ export class PosService {
   }
 
   /**
-   * Zaevidování platby s kontrolou idempotence a ochranou proti přeplatku.
+   * Zaevidování platby s podporou výběru konkrétních položek a evidence spropitného (tips).
+   * V databázi striktně odděluje běžnou cenu položek (amount_cents) od spropitného (tip_amount_cents).
    */
   async recordPayment(
     orderId: string,
     amountCents: number,
     paymentMethod: PaymentMethod,
-    customIdempotencyId?: string
+    optionsOrIdempotency?: string | RecordPaymentOptions
   ): Promise<Payment> {
-    const paymentId = customIdempotencyId || generateUUID();
+    let options: RecordPaymentOptions = {};
+    if (typeof optionsOrIdempotency === 'string') {
+      options = { customIdempotencyId: optionsOrIdempotency };
+    } else if (optionsOrIdempotency) {
+      options = optionsOrIdempotency;
+    }
+
+    const tipAmountCents = options.tipAmountCents || 0;
+    const paymentId = options.customIdempotencyId || generateUUID();
 
     // 1. Idempotence: pokud platba již existuje, vrátíme ji
     const existingPayment = await db.payments.get(paymentId);
@@ -299,18 +316,55 @@ export class PosService {
     const payments = await db.payments.where({ order_id: orderId }).toArray();
 
     const calc = calculateOrder(items, payments);
-    const validation = validatePaymentAmount(calc.remainingCents, amountCents);
+    const validation = validatePaymentAmount(calc.remainingCents, amountCents, tipAmountCents);
     if (!validation.valid) {
       throw new Error(validation.error);
     }
 
     const now = new Date().toISOString();
+
+    // 3. Aktualizace zaplaceného množství (paid_quantity) na položkách
+    if (options.paidItems && options.paidItems.length > 0) {
+      for (const pItem of options.paidItems) {
+        const item = await db.order_items.get(pItem.order_item_id);
+        if (item) {
+          const currentPaid = item.paid_quantity || 0;
+          await db.order_items.update(item.id, {
+            paid_quantity: Math.min(item.quantity, currentPaid + pItem.quantity),
+            updated_at: now,
+          });
+        }
+      }
+    } else {
+      // Pokud nebyly předány konkrétní položky, automaticky alokujeme úhradu postupně k dosud nezaplaceným
+      let remainingToAllocate = amountCents;
+      for (const item of items) {
+        if (remainingToAllocate <= 0) break;
+        if (item.delivery_status === 'cancelled') continue;
+        const currentPaid = item.paid_quantity || 0;
+        const unpaidQty = item.quantity - currentPaid;
+        if (unpaidQty <= 0) continue;
+
+        const maxCanPayQty = Math.floor(remainingToAllocate / item.unit_price_cents_snapshot);
+        const qtyToPay = Math.min(unpaidQty, maxCanPayQty);
+        if (qtyToPay > 0) {
+          await db.order_items.update(item.id, {
+            paid_quantity: currentPaid + qtyToPay,
+            updated_at: now,
+          });
+          remainingToAllocate -= qtyToPay * item.unit_price_cents_snapshot;
+        }
+      }
+    }
+
     const newPayment: Payment = {
       id: paymentId,
       order_id: orderId,
       amount_cents: amountCents,
+      tip_amount_cents: tipAmountCents,
       payment_method: paymentMethod,
       status: 'completed',
+      paid_items: options.paidItems,
       cancel_reason: null,
       created_at: now,
       cancelled_at: null,
@@ -323,7 +377,13 @@ export class PosService {
       id: generateUUID(),
       payment_id: paymentId,
       event_type: 'created',
-      metadata: { amountCents, method: paymentMethod },
+      metadata: {
+        amountCents,
+        tipAmountCents,
+        totalPaidCents: amountCents + tipAmountCents,
+        method: paymentMethod,
+        paidItems: options.paidItems,
+      },
       created_at: now,
     };
     await db.payment_events.add(event);
@@ -356,6 +416,21 @@ export class PosService {
     }
 
     const now = new Date().toISOString();
+
+    // Vrácení paid_quantity na položkách, pokud byly specifikovány
+    if (payment.paid_items && payment.paid_items.length > 0) {
+      for (const pItem of payment.paid_items) {
+        const item = await db.order_items.get(pItem.order_item_id);
+        if (item) {
+          const currentPaid = item.paid_quantity || 0;
+          await db.order_items.update(item.id, {
+            paid_quantity: Math.max(0, currentPaid - pItem.quantity),
+            updated_at: now,
+          });
+        }
+      }
+    }
+
     await db.payments.update(paymentId, {
       status: 'cancelled',
       cancel_reason: reason,

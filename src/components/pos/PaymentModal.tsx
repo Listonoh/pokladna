@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { PaymentMethod } from '../../domain/types';
+import React, { useState, useEffect } from 'react';
+import { PaymentMethod, OrderItem, PaymentItemDetail } from '../../domain/types';
 import { formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
-import { Banknote, CreditCard, X, CheckCircle, AlertCircle } from 'lucide-react';
+import { Banknote, CreditCard, X, CheckCircle, AlertCircle, Heart, CheckSquare, Square } from 'lucide-react';
 
 interface PaymentModalProps {
   isOpen: boolean;
@@ -11,7 +11,12 @@ interface PaymentModalProps {
   totalCents: number;
   paidCents: number;
   remainingCents: number;
-  onConfirmPayment: (amountCents: number, method: PaymentMethod) => Promise<void>;
+  unpaidItems: OrderItem[];
+  onConfirmPayment: (
+    amountCents: number,
+    method: PaymentMethod,
+    options: { tipAmountCents: number; paidItems: PaymentItemDetail[] }
+  ) => Promise<void>;
 }
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({
@@ -22,46 +27,134 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   totalCents,
   paidCents,
   remainingCents,
+  unpaidItems,
   onConfirmPayment,
 }) => {
   if (!isOpen) return null;
 
+  // Položky, které ještě zbývá uhradit
+  const payableItems = unpaidItems.filter((i) => {
+    const paidQty = i.paid_quantity || 0;
+    return i.delivery_status !== 'cancelled' && i.quantity > paidQty;
+  });
+
+  // Mapa vybraných kusů k úhradě: itemId -> vybrané množství
+  const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
-  const [amountInputCzk, setAmountInputCzk] = useState<string>(
-    String(centsToCzk(remainingCents))
-  );
+  const [totalEnteredCzk, setTotalEnteredCzk] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const enteredCents = czkToCents(Number(amountInputCzk) || 0);
-  const remainingAfterPayment = Math.max(0, remainingCents - enteredCents);
-  const isOverpayment = enteredCents > remainingCents;
-  const isInvalidAmount = enteredCents <= 0 || isNaN(enteredCents);
+  // Inicializace: ve výchozím stavu jsou vybrány VŠECHNY nezaplacené položky
+  useEffect(() => {
+    const initial: Record<string, number> = {};
+    let initialTotalCents = 0;
 
-  const handleSetQuickAmount = (czk: number) => {
-    setAmountInputCzk(String(czk));
+    payableItems.forEach((i) => {
+      const remainingQty = i.quantity - (i.paid_quantity || 0);
+      initial[i.id] = remainingQty;
+      initialTotalCents += remainingQty * i.unit_price_cents_snapshot;
+    });
+
+    setSelectedQuantities(initial);
+    setTotalEnteredCzk(String(centsToCzk(initialTotalCents)));
+    setErrorMessage(null);
+  }, [isOpen]);
+
+  // Spočítat cenu vybraných položek (normální cena)
+  const selectedItemsCostCents = payableItems.reduce((sum, item) => {
+    const qty = selectedQuantities[item.id] || 0;
+    return sum + (qty * item.unit_price_cents_snapshot);
+  }, 0);
+
+  const enteredTotalCents = czkToCents(Number(totalEnteredCzk) || 0);
+  const tipAmountCents = Math.max(0, enteredTotalCents - selectedItemsCostCents);
+
+  // Validace
+  const isNoItemSelected = selectedItemsCostCents <= 0;
+  const isUnderpaid = enteredTotalCents < selectedItemsCostCents;
+
+  const handleToggleSelectAll = (select: boolean) => {
+    const updated: Record<string, number> = {};
+    let newCostCents = 0;
+
+    if (select) {
+      payableItems.forEach((i) => {
+        const remainingQty = i.quantity - (i.paid_quantity || 0);
+        updated[i.id] = remainingQty;
+        newCostCents += remainingQty * i.unit_price_cents_snapshot;
+      });
+    }
+
+    setSelectedQuantities(updated);
+    setTotalEnteredCzk(String(centsToCzk(newCostCents)));
     setErrorMessage(null);
   };
 
-  const handleFullAmount = () => {
-    setAmountInputCzk(String(centsToCzk(remainingCents)));
+  const handleItemQtyChange = (itemId: string, newQty: number, maxQty: number) => {
+    const clampedQty = Math.max(0, Math.min(maxQty, newQty));
+    const updated = { ...selectedQuantities, [itemId]: clampedQty };
+    setSelectedQuantities(updated);
+
+    // Přepočítat cenu položek
+    const newCostCents = payableItems.reduce((sum, item) => {
+      const q = updated[item.id] || 0;
+      return sum + (q * item.unit_price_cents_snapshot);
+    }, 0);
+
+    // Pokud uživatel neměl zadané dýško, automaticky srovnáme zadanou částku
+    setTotalEnteredCzk(String(centsToCzk(newCostCents)));
+    setErrorMessage(null);
+  };
+
+  const handleApplyTipPreset = (additionalCzk: number) => {
+    const baseCzk = centsToCzk(selectedItemsCostCents);
+    setTotalEnteredCzk(String(baseCzk + additionalCzk));
+    setErrorMessage(null);
+  };
+
+  const handleRoundTo = (step: number) => {
+    const baseCzk = centsToCzk(selectedItemsCostCents);
+    const rounded = Math.ceil(baseCzk / step) * step;
+    const finalAmount = rounded === baseCzk ? baseCzk + step : rounded;
+    setTotalEnteredCzk(String(finalAmount));
     setErrorMessage(null);
   };
 
   const handleConfirm = async () => {
-    if (isInvalidAmount) {
-      setErrorMessage('Zadejte prosím platnou částku k úhradě.');
+    if (isNoItemSelected) {
+      setErrorMessage('Vyberte prosím alespoň jednu položku k úhradě.');
       return;
     }
-    if (isOverpayment) {
-      setErrorMessage(`Nelze zaplatit více než zbývající dluh (${formatCents(remainingCents)}).`);
+    if (isUnderpaid) {
+      setErrorMessage(`Zadaná částka (${formatCents(enteredTotalCents)}) nepokrývá cenu vybraných položek (${formatCents(selectedItemsCostCents)}).`);
       return;
+    }
+
+    // Sestavení detailu placených položek
+    const paidItems: PaymentItemDetail[] = [];
+    for (const item of payableItems) {
+      const qty = selectedQuantities[item.id] || 0;
+      if (qty > 0) {
+        paidItems.push({
+          order_item_id: item.id,
+          product_name: item.product_name_snapshot,
+          unit_price_cents: item.unit_price_cents_snapshot,
+          quantity: qty,
+          total_cents: qty * item.unit_price_cents_snapshot,
+        });
+      }
     }
 
     try {
       setIsSubmitting(true);
       setErrorMessage(null);
-      await onConfirmPayment(enteredCents, paymentMethod);
+
+      await onConfirmPayment(selectedItemsCostCents, paymentMethod, {
+        tipAmountCents,
+        paidItems,
+      });
+
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Chyba při ukládání platby.';
@@ -72,143 +165,242 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="bg-parchment-100 rounded-2xl shadow-2xl border border-parchment-300 w-full max-w-lg overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center p-3 select-none">
+      <div className="bg-parchment-100 rounded-2xl shadow-2xl border border-parchment-300 w-full max-w-2xl max-h-[92vh] overflow-hidden flex flex-col">
         {/* Hlavička */}
-        <div className="bg-tea-800 text-parchment-50 px-6 py-4 flex items-center justify-between">
+        <div className="bg-tea-800 text-parchment-50 px-6 py-3.5 flex items-center justify-between shrink-0">
           <div>
-            <h2 className="text-xl font-bold tracking-tight">Vyúčtování objednávky</h2>
-            <p className="text-sm text-tea-200">
-              {tableName} • Účet #{orderNumber}
+            <h2 className="text-lg font-bold tracking-tight">Vyúčtování objednávky s dýškem</h2>
+            <p className="text-xs text-tea-200">
+              {tableName} • Účet #{orderNumber} • Celkem: {formatCents(totalCents)} (zaplaceno: {formatCents(paidCents)}) • Zbývá: {formatCents(remainingCents)}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 text-tea-200 hover:text-white rounded-lg hover:bg-tea-700/60 transition-colors"
+            className="p-1.5 text-tea-200 hover:text-white rounded-lg hover:bg-tea-700/60 transition-colors"
           >
-            <X className="w-6 h-6" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Přehled částek */}
-        <div className="p-6 space-y-5">
-          <div className="grid grid-cols-3 gap-3 bg-parchment-200/80 p-4 rounded-xl border border-parchment-300/60 text-center">
-            <div>
-              <span className="text-xs text-ink-500 block uppercase font-medium">Celkem účet</span>
-              <span className="text-lg font-bold text-ink-800">{formatCents(totalCents)}</span>
-            </div>
-            <div>
-              <span className="text-xs text-ink-500 block uppercase font-medium">Zaplaceno</span>
-              <span className="text-lg font-semibold text-tea-600">{formatCents(paidCents)}</span>
-            </div>
-            <div>
-              <span className="text-xs text-ink-500 block uppercase font-medium">Zbývá doplatit</span>
-              <span className="text-xl font-black text-amberGold-600">
-                {formatCents(remainingCents)}
+        {/* Scrollovatelný obsah */}
+        <div className="p-5 overflow-y-auto space-y-4 flex-1">
+          {/* 1. VÝBĚR POLOŽEK K ÚHRADĚ */}
+          <div className="bg-white rounded-xl border border-parchment-300 p-3.5 shadow-sm space-y-2.5">
+            <div className="flex items-center justify-between border-b border-parchment-200 pb-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-ink-700">
+                1. Vyberte položky k zaplacení ({payableItems.length})
               </span>
-            </div>
-          </div>
-
-          {/* Volba platební metody */}
-          <div>
-            <label className="block text-sm font-semibold text-ink-700 mb-2">
-              Platební metoda
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('cash')}
-                className={`flex items-center justify-center space-x-3 py-3.5 px-4 rounded-xl font-semibold border-2 transition-all ${
-                  paymentMethod === 'cash'
-                    ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
-                    : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
-                }`}
-              >
-                <Banknote className="w-5 h-5 text-tea-600" />
-                <span>Hotově</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('card')}
-                className={`flex items-center justify-center space-x-3 py-3.5 px-4 rounded-xl font-semibold border-2 transition-all ${
-                  paymentMethod === 'card'
-                    ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
-                    : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
-                }`}
-              >
-                <CreditCard className="w-5 h-5 text-tea-600" />
-                <span>Kartou</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Zadaná částka */}
-          <div>
-            <div className="flex justify-between items-center mb-1.5">
-              <label htmlFor="amountInput" className="text-sm font-semibold text-ink-700">Částka k úhradě (Kč)</label>
-              <button
-                type="button"
-                onClick={handleFullAmount}
-                className="text-xs font-semibold text-tea-600 hover:text-tea-800 hover:underline"
-              >
-                Celý zbývající dluh ({formatCents(remainingCents)})
-              </button>
+              <div className="flex items-center space-x-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => handleToggleSelectAll(true)}
+                  className="text-tea-700 font-semibold hover:underline flex items-center gap-1"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" /> Vybrat vše
+                </button>
+                <span className="text-parchment-300">•</span>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSelectAll(false)}
+                  className="text-ink-500 font-medium hover:underline flex items-center gap-1"
+                >
+                  <Square className="w-3.5 h-3.5" /> Zrušit výběr
+                </button>
+              </div>
             </div>
 
-            <div className="relative">
-              <input
-                id="amountInput"
-                type="number"
-                step="1"
-                min="1"
-                max={centsToCzk(remainingCents)}
-                value={amountInputCzk}
-                onChange={(e) => {
-                  setAmountInputCzk(e.target.value);
-                  setErrorMessage(null);
-                }}
-                className={`w-full text-2xl font-bold py-3 px-4 rounded-xl border-2 text-right bg-white ${
-                  isOverpayment
-                    ? 'border-terracotta-500 text-terracotta-500 focus:ring-terracotta-500'
-                    : 'border-parchment-300 text-ink-800 focus:border-tea-600 focus:outline-none'
-                }`}
-              />
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg text-ink-400 font-semibold">
-                Kč
-              </span>
-            </div>
+            <div className="max-h-48 overflow-y-auto divide-y divide-parchment-100 pr-1 space-y-1">
+              {payableItems.map((item) => {
+                const remainingQty = item.quantity - (item.paid_quantity || 0);
+                const currentSelectedQty = selectedQuantities[item.id] || 0;
+                const isSelected = currentSelectedQty > 0;
 
-            {/* Rychlá tlačítka pro částečné platby */}
-            <div className="flex flex-wrap gap-2 mt-2.5">
-              {[50, 100, 200, 500].map((preset) => {
-                const disabled = preset > centsToCzk(remainingCents);
                 return (
-                  <button
-                    key={preset}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => handleSetQuickAmount(preset)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                      disabled
-                        ? 'opacity-40 border-parchment-200 bg-parchment-100 text-ink-400 cursor-not-allowed'
-                        : 'border-parchment-300 bg-white text-ink-700 hover:bg-parchment-200'
+                  <div
+                    key={item.id}
+                    className={`py-2 px-2 rounded-lg flex items-center justify-between transition-colors ${
+                      isSelected ? 'bg-tea-50/60' : 'opacity-60 hover:bg-parchment-50'
                     }`}
                   >
-                    +{preset} Kč
-                  </button>
+                    <div className="flex items-center space-x-2.5 flex-1 mr-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) =>
+                          handleItemQtyChange(item.id, e.target.checked ? remainingQty : 0, remainingQty)
+                        }
+                        className="w-4 h-4 rounded text-tea-600 focus:ring-tea-500"
+                      />
+                      <div>
+                        <span className="text-sm font-semibold text-ink-900 block leading-tight">
+                          {item.product_name_snapshot}
+                        </span>
+                        <span className="text-xs text-ink-500 font-mono">
+                          {formatCents(item.unit_price_cents_snapshot)} / ks
+                          {item.paid_quantity > 0 && ` (již uhrazeno ${item.paid_quantity} ks)`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Volba počtu kusů k úhradě */}
+                    <div className="flex items-center space-x-2">
+                      <div className="flex items-center border border-parchment-300 rounded-lg bg-white overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => handleItemQtyChange(item.id, currentSelectedQty - 1, remainingQty)}
+                          className="px-2 py-1 text-ink-600 hover:bg-parchment-200 text-xs font-bold"
+                        >
+                          -
+                        </button>
+                        <span className="px-2 py-1 text-xs font-bold text-ink-800">
+                          {currentSelectedQty} / {remainingQty}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleItemQtyChange(item.id, currentSelectedQty + 1, remainingQty)}
+                          className="px-2 py-1 text-ink-600 hover:bg-parchment-200 text-xs font-bold"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <span className="text-xs font-bold text-ink-900 w-16 text-right">
+                        {formatCents(currentSelectedQty * item.unit_price_cents_snapshot)}
+                      </span>
+                    </div>
+                  </div>
                 );
               })}
             </div>
+
+            <div className="bg-parchment-100 p-2.5 rounded-lg flex justify-between items-center text-xs font-bold text-ink-800">
+              <span>Cena vybraných položek (běžný účet):</span>
+              <span className="text-sm text-tea-800">{formatCents(selectedItemsCostCents)}</span>
+            </div>
           </div>
 
-          {/* Informace po této platbě */}
-          <div className="bg-parchment-50 p-3 rounded-lg border border-parchment-300/80 text-xs flex justify-between items-center text-ink-600">
-            <span>Po této platbě zbude doplatit:</span>
-            <span className="font-bold text-sm text-ink-800">
-              {formatCents(remainingAfterPayment)}
-            </span>
+          {/* 2. ZADÁNÍ ZAPLACENÉ ČÁSTKY A SPROPITNÉHO */}
+          <div className="bg-white rounded-xl border border-parchment-300 p-3.5 shadow-sm space-y-3">
+            <label htmlFor="totalAmountInput" className="text-xs font-bold uppercase tracking-wider text-ink-700 block">
+              2. Zaplacená částka vč. dýška (Kč)
+            </label>
+
+            <div className="relative">
+              <input
+                id="totalAmountInput"
+                type="number"
+                step="1"
+                min={centsToCzk(selectedItemsCostCents)}
+                value={totalEnteredCzk}
+                onChange={(e) => {
+                  setTotalEnteredCzk(e.target.value);
+                  setErrorMessage(null);
+                }}
+                className={`w-full text-2xl font-black py-2.5 px-4 rounded-xl border-2 text-right bg-white ${
+                  isUnderpaid
+                    ? 'border-terracotta-500 text-terracotta-500 focus:ring-terracotta-500'
+                    : 'border-tea-600 text-ink-900 focus:outline-none'
+                }`}
+              />
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-ink-400 font-bold">
+                Celkem přijato (Kč):
+              </span>
+            </div>
+
+            {/* Rychlá tlačítka pro spropitné */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-xs text-ink-500 mr-1 flex items-center gap-1 font-semibold">
+                <Heart className="w-3.5 h-3.5 text-amberGold-500" /> Dýško:
+              </span>
+              <button
+                type="button"
+                onClick={() => setTotalEnteredCzk(String(centsToCzk(selectedItemsCostCents)))}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-parchment-50 hover:bg-parchment-200 text-ink-700"
+              >
+                +0 Kč
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTipPreset(10)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-white hover:bg-parchment-200 text-ink-700"
+              >
+                +10 Kč
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTipPreset(20)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-white hover:bg-parchment-200 text-ink-700"
+              >
+                +20 Kč
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTipPreset(50)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-white hover:bg-parchment-200 text-ink-700"
+              >
+                +50 Kč
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRoundTo(50)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-tea-300 bg-tea-50 text-tea-800 hover:bg-tea-100"
+              >
+                Zaokrouhlit na 50 Kč
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRoundTo(100)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-tea-300 bg-tea-50 text-tea-800 hover:bg-tea-100"
+              >
+                Zaokrouhlit na 100 Kč
+              </button>
+            </div>
+
+            {/* Rozpad do databáze */}
+            <div className="grid grid-cols-2 gap-2 bg-parchment-100 p-3 rounded-xl border border-parchment-300/80 text-xs">
+              <div>
+                <span className="text-ink-500 block">Zboží (tržba pokladny):</span>
+                <span className="text-sm font-bold text-ink-900">
+                  {formatCents(selectedItemsCostCents)}
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-ink-500 block">Spropitné (odděleno v DB):</span>
+                <span className={`text-sm font-black ${tipAmountCents > 0 ? 'text-amberGold-600' : 'text-ink-600'}`}>
+                  +{formatCents(tipAmountCents)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3. VOLBA METODY */}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('cash')}
+              className={`flex items-center justify-center space-x-2 py-3 px-4 rounded-xl font-semibold border-2 transition-all ${
+                paymentMethod === 'cash'
+                  ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
+                  : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
+              }`}
+            >
+              <Banknote className="w-5 h-5 text-tea-600" />
+              <span>Hotově</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('card')}
+              className={`flex items-center justify-center space-x-2 py-3 px-4 rounded-xl font-semibold border-2 transition-all ${
+                paymentMethod === 'card'
+                  ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
+                  : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
+              }`}
+            >
+              <CreditCard className="w-5 h-5 text-tea-600" />
+              <span>Kartou</span>
+            </button>
           </div>
 
           {/* Chybová zpráva */}
@@ -221,28 +413,37 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         </div>
 
         {/* Tlačítka potvrzení */}
-        <div className="bg-parchment-200/60 px-6 py-4 flex items-center justify-end space-x-3 border-t border-parchment-300">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="px-5 py-3 rounded-xl font-medium text-ink-600 hover:bg-parchment-300/60 transition-colors"
-          >
-            Zrušit
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirm}
-            disabled={isSubmitting || isInvalidAmount || isOverpayment}
-            className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold text-white shadow-md transition-all ${
-              isSubmitting || isInvalidAmount || isOverpayment
-                ? 'bg-ink-300 cursor-not-allowed'
-                : 'bg-tea-600 hover:bg-tea-700 active:scale-[0.98]'
-            }`}
-          >
-            <CheckCircle className="w-5 h-5" />
-            <span>{isSubmitting ? 'Ukládám...' : `Potvrdit platbu (${formatCents(enteredCents)})`}</span>
-          </button>
+        <div className="bg-parchment-200/80 px-6 py-3.5 flex items-center justify-between border-t border-parchment-300 shrink-0">
+          <div className="text-xs text-ink-600">
+            <span>K úhradě celkem: </span>
+            <strong className="text-sm font-black text-ink-900">
+              {formatCents(enteredTotalCents)}
+            </strong>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSubmitting}
+              className="px-4 py-2.5 rounded-xl font-medium text-xs text-ink-600 hover:bg-parchment-300/60 transition-colors"
+            >
+              Zrušit
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={isSubmitting || isNoItemSelected || isUnderpaid}
+              className={`flex items-center space-x-1.5 px-5 py-2.5 rounded-xl font-bold text-xs text-white shadow-md transition-all ${
+                isSubmitting || isNoItemSelected || isUnderpaid
+                  ? 'bg-ink-300 cursor-not-allowed'
+                  : 'bg-tea-600 hover:bg-tea-700 active:scale-[0.98]'
+              }`}
+            >
+              <CheckCircle className="w-4 h-4" />
+              <span>{isSubmitting ? 'Ukládám...' : `Zaúčtovat platbu (${formatCents(enteredTotalCents)})`}</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

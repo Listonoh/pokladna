@@ -49,6 +49,7 @@ export interface OrderItem {
   product_name_snapshot: string;
   unit_price_cents_snapshot: number;
   quantity: number;
+  paid_quantity: number; // Kolik kusů již bylo zaplaceno
   note?: string;
   delivery_status: DeliveryStatus;
   delivered_at?: string | null;
@@ -71,12 +72,22 @@ export interface OrderItemEvent {
   created_at: string;
 }
 
+export interface PaymentItemDetail {
+  order_item_id: string;
+  product_name: string;
+  unit_price_cents: number;
+  quantity: number;
+  total_cents: number;
+}
+
 export interface Payment {
   id: string; // Idempotentní UUID v4 generované klientem
   order_id: string;
-  amount_cents: number;
+  amount_cents: number; // Cena zaplacených položek bez spropitného
+  tip_amount_cents: number; // Spropitné / dýško
   payment_method: PaymentMethod;
   status: PaymentStatus;
+  paid_items?: PaymentItemDetail[];
   cancel_reason?: string | null;
   created_at: string;
   cancelled_at?: string | null;
@@ -108,11 +119,16 @@ export interface SyncOutboxItem {
 
 // Pohledové struktury pro UI
 export interface OrderCalculation {
-  totalCents: number;
-  paidCents: number;
-  remainingCents: number;
-  totalCashCents: number;
-  totalCardCents: number;
+  totalCents: number; // Celková hodnota položek
+  paidCents: number; // Zaplaceno za položky (bez spropitného)
+  totalTipsCents: number; // Celkové spropitné
+  remainingCents: number; // Zbývá doplatit za položky
+  totalCashCents: number; // Hotovost (pouze položky)
+  totalCardCents: number; // Karta (pouze položky)
+  totalCashTipsCents: number; // Hotovost (spropitné)
+  totalCardTipsCents: number; // Karta (spropitné)
+  totalReceivedCashCents: number; // Celkem hotovost (položky + spropitné)
+  totalReceivedCardCents: number; // Celkem karta (položky + spropitné)
   pendingDeliveryCount: number;
   deliveredCount: number;
   isFullyPaid: boolean;

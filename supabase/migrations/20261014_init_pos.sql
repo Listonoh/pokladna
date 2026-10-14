@@ -1,6 +1,6 @@
 -- ==============================================================================
 -- Migrace: Pokladní systém čajovny Miska s Listím
--- Inicializace schématu, tabulek, indexů, RLS a transakčních RPC funkcí
+-- Inicializace schématu, tabulek, indexů, RLS, spropitného (tips) a RPC funkcí
 -- ==============================================================================
 
 -- 1. Tabulka kategorií
@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS public.order_items (
     product_name_snapshot TEXT NOT NULL,
     unit_price_cents_snapshot INT NOT NULL CHECK (unit_price_cents_snapshot >= 0),
     quantity INT NOT NULL CHECK (quantity > 0),
+    paid_quantity INT NOT NULL DEFAULT 0 CHECK (paid_quantity >= 0 AND paid_quantity <= quantity),
     note TEXT,
     delivery_status TEXT NOT NULL CHECK (delivery_status IN ('pending', 'delivered', 'cancelled')) DEFAULT 'pending',
     delivered_at TIMESTAMPTZ,
@@ -70,13 +71,15 @@ CREATE TABLE IF NOT EXISTS public.order_item_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now())
 );
 
--- 7. Tabulka plateb (s idempotentním UUID v4 klientským klíčem)
+-- 7. Tabulka plateb s evidencí spropitného (tip_amount_cents) a hrazených položek
 CREATE TABLE IF NOT EXISTS public.payments (
     id UUID PRIMARY KEY,
     order_id UUID NOT NULL REFERENCES public.orders(id) ON DELETE RESTRICT,
     amount_cents INT NOT NULL CHECK (amount_cents > 0),
+    tip_amount_cents INT NOT NULL DEFAULT 0 CHECK (tip_amount_cents >= 0),
     payment_method TEXT NOT NULL CHECK (payment_method IN ('cash', 'card')),
     status TEXT NOT NULL CHECK (status IN ('completed', 'cancelled')) DEFAULT 'completed',
+    paid_items JSONB DEFAULT '[]'::jsonb,
     cancel_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now()),
     cancelled_at TIMESTAMPTZ
@@ -102,14 +105,16 @@ CREATE INDEX IF NOT EXISTS idx_payments_order ON public.payments(order_id);
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON public.payments(created_at);
 
 -- ==============================================================================
--- Transakční RPC funkce pro platby s ochranou proti přeplatku a idempotencí
+-- Transakční RPC funkce pro platby s oddělením spropitného
 -- ==============================================================================
 
 CREATE OR REPLACE FUNCTION public.process_payment(
     p_payment_id UUID,
     p_order_id UUID,
     p_amount_cents INT,
-    p_payment_method TEXT
+    p_payment_method TEXT,
+    p_tip_amount_cents INT DEFAULT 0,
+    p_paid_items JSONB DEFAULT '[]'::jsonb
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -122,8 +127,7 @@ DECLARE
     v_paid_cents INT := 0;
     v_remaining_cents INT := 0;
     v_new_paid_cents INT := 0;
-    v_all_delivered BOOLEAN := false;
-    v_pending_count INT := 0;
+    v_item JSONB;
 BEGIN
     -- 1. Idempotence: pokud platba s tímto ID již existuje, vrátíme ji
     SELECT * INTO v_existing_payment FROM public.payments WHERE id = p_payment_id;
@@ -152,7 +156,7 @@ BEGIN
     FROM public.order_items
     WHERE order_id = p_order_id AND delivery_status != 'cancelled';
 
-    -- 4. Spočtení dosud zaplacených platných plateb
+    -- 4. Spočtení dosud zaplacených platných plateb (bez spropitného)
     SELECT COALESCE(SUM(amount_cents), 0)
     INTO v_paid_cents
     FROM public.payments
@@ -160,28 +164,52 @@ BEGIN
 
     v_remaining_cents := GREATEST(0, v_total_cents - v_paid_cents);
 
-    -- 5. Striktní kontrola přeplatku
+    -- 5. Striktní kontrola částky
     IF p_amount_cents <= 0 THEN
-        RAISE EXCEPTION 'Částka platby musí být kladná.';
+        RAISE EXCEPTION 'Částka za položky musí být kladná.';
+    END IF;
+
+    IF p_tip_amount_cents < 0 THEN
+        RAISE EXCEPTION 'Spropitné nemůže být záporné.';
     END IF;
 
     IF p_amount_cents > v_remaining_cents THEN
-        RAISE EXCEPTION 'Částka platby (%) přesahuje zbývající dluh (%).', p_amount_cents, v_remaining_cents;
+        RAISE EXCEPTION 'Částka za položky (%) přesahuje zbývající dluh (%).', p_amount_cents, v_remaining_cents;
     END IF;
 
-    -- 6. Vložení nové platby
-    INSERT INTO public.payments (id, order_id, amount_cents, payment_method, status, created_at)
-    VALUES (p_payment_id, p_order_id, p_amount_cents, p_payment_method, 'completed', timezone('utc', now()));
+    -- 6. Vložení nové platby se spropitným
+    INSERT INTO public.payments (
+        id, order_id, amount_cents, tip_amount_cents, payment_method, status, paid_items, created_at
+    ) VALUES (
+        p_payment_id, p_order_id, p_amount_cents, p_tip_amount_cents, p_payment_method, 'completed', p_paid_items, timezone('utc', now())
+    );
 
-    -- 7. Audit log události
+    -- 7. Aktualizace zaplaceného množství na položkách
+    IF jsonb_array_length(p_paid_items) > 0 THEN
+        FOR v_item IN SELECT * FROM jsonb_array_elements(p_paid_items)
+        LOOP
+            UPDATE public.order_items
+            SET paid_quantity = LEAST(quantity, paid_quantity + (v_item->>'quantity')::int),
+                updated_at = timezone('utc', now())
+            WHERE id = (v_item->>'order_item_id')::uuid;
+        END LOOP;
+    END IF;
+
+    -- 8. Audit log události
     INSERT INTO public.payment_events (payment_id, event_type, metadata)
-    VALUES (p_payment_id, 'created', jsonb_build_object('amount_cents', p_amount_cents, 'method', p_payment_method));
+    VALUES (
+        p_payment_id,
+        'created',
+        jsonb_build_object(
+            'amount_cents', p_amount_cents,
+            'tip_amount_cents', p_tip_amount_cents,
+            'method', p_payment_method,
+            'paid_items', p_paid_items
+        )
+    );
 
-    -- 8. Kontrola doručení a případné uzavření objednávky
+    -- 9. Kontrola plného zaplacení a uzavření účtu
     v_new_paid_cents := v_paid_cents + p_amount_cents;
-    SELECT COUNT(*) INTO v_pending_count
-    FROM public.order_items
-    WHERE order_id = p_order_id AND delivery_status = 'pending';
 
     IF v_new_paid_cents >= v_total_cents AND v_total_cents > 0 THEN
         UPDATE public.orders
@@ -213,8 +241,10 @@ AS $$
 DECLARE
     v_order_id UUID;
     v_status TEXT;
+    v_paid_items JSONB;
+    v_item JSONB;
 BEGIN
-    SELECT order_id, status INTO v_order_id, v_status
+    SELECT order_id, status, paid_items INTO v_order_id, v_status, v_paid_items
     FROM public.payments
     WHERE id = p_payment_id FOR UPDATE;
 
@@ -229,6 +259,17 @@ BEGIN
     UPDATE public.payments
     SET status = 'cancelled', cancel_reason = p_reason, cancelled_at = timezone('utc', now())
     WHERE id = p_payment_id;
+
+    -- Vrácení paid_quantity na položkách
+    IF jsonb_array_length(v_paid_items) > 0 THEN
+        FOR v_item IN SELECT * FROM jsonb_array_elements(v_paid_items)
+        LOOP
+            UPDATE public.order_items
+            SET paid_quantity = GREATEST(0, paid_quantity - (v_item->>'quantity')::int),
+                updated_at = timezone('utc', now())
+            WHERE id = (v_item->>'order_item_id')::uuid;
+        END LOOP;
+    END IF;
 
     INSERT INTO public.payment_events (payment_id, event_type, metadata)
     VALUES (p_payment_id, 'cancelled', jsonb_build_object('reason', p_reason));

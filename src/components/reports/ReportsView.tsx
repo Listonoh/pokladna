@@ -13,8 +13,8 @@ import {
   Download,
   Receipt,
   FileSpreadsheet,
-  AlertCircle,
   TrendingUp,
+  Heart,
 } from 'lucide-react';
 
 export const ReportsView: React.FC = () => {
@@ -48,11 +48,14 @@ export const ReportsView: React.FC = () => {
     let csv = `Denní uzávěrka: ${selectedDate}\n`;
     csv += `Vygenerováno: ${new Date().toLocaleString('cs-CZ')}\n\n`;
 
-    csv += `Finanční souhrn plateb\n`;
-    csv += `Celkem přijaté platby;${report.totalPaymentsCents / 100} Kč\n`;
-    csv += `Platby v hotovosti;${report.cashPaymentsCents / 100} Kč\n`;
-    csv += `Platby kartou;${report.cardPaymentsCents / 100} Kč\n`;
-    csv += `Hodnota prodaného zboží;${report.soldItemsValueCents / 100} Kč\n`;
+    csv += `Finanční souhrn plateb a spropitného\n`;
+    csv += `Celkem přijaté platby (vč. spropitného);${report.totalPaymentsCents / 100} Kč\n`;
+    csv += `Čisté tržby za zboží;${report.normalSalesCents / 100} Kč\n`;
+    csv += `Spropitné celkem;${report.totalTipsCents / 100} Kč\n`;
+    csv += `  - Spropitné hotově;${report.cashTipsCents / 100} Kč\n`;
+    csv += `  - Spropitné kartou;${report.cardTipsCents / 100} Kč\n`;
+    csv += `Hotovost celkem (zboží + spropitné);${report.cashPaymentsCents / 100} Kč\n`;
+    csv += `Karta celkem (zboží + spropitné);${report.cardPaymentsCents / 100} Kč\n`;
     csv += `Neuhrazené zůstatky otevřených účtů;${report.unpaidReceivablesCents / 100} Kč\n\n`;
 
     csv += `Prodeje podle kategorií\n`;
@@ -92,16 +95,16 @@ export const ReportsView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-61px)] overflow-y-auto bg-parchment-100 p-6 select-none space-y-6">
+    <div className="flex-1 min-h-0 overflow-y-auto bg-parchment-100 p-4 sm:p-6 select-none space-y-6 pb-16">
       {/* Hlavička s voličem data a exporty */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-parchment-300 shadow-sm">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-parchment-300 shadow-sm shrink-0">
         <div>
           <h2 className="text-xl font-bold text-ink-900 tracking-tight flex items-center gap-2">
             <Receipt className="w-6 h-6 text-tea-600" />
             Denní přehled a statistika tržeb
           </h2>
           <p className="text-xs text-ink-500 mt-0.5">
-            Přesná evidence plateb, prodaných položek a otevřených zůstatků v čase Europe/Prague
+            Evidence plateb, prodaných položek a spropitného v čase Europe/Prague
           </p>
         </div>
 
@@ -153,15 +156,33 @@ export const ReportsView: React.FC = () => {
               {formatCents(report.totalPaymentsCents)}
             </span>
             <span className="text-xs text-ink-400 block mt-1">
-              Za {selectedDate} (reálně přijaté peníze)
+              Tržba {formatCents(report.normalSalesCents)} + Dýška {formatCents(report.totalTipsCents)}
             </span>
           </div>
         </div>
 
-        {/* Hotovost */}
+        {/* Spropitné (Tips) */}
+        <div className="bg-white p-5 rounded-2xl border border-amberGold-500/40 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs font-bold uppercase text-amberGold-600">
+            <span>Spropitné (Dýška)</span>
+            <div className="p-2 bg-amberGold-500/10 rounded-xl text-amberGold-600">
+              <Heart className="w-5 h-5" />
+            </div>
+          </div>
+          <div className="mt-3">
+            <span className="text-2xl font-black text-amberGold-600">
+              {formatCents(report.totalTipsCents)}
+            </span>
+            <span className="text-xs text-ink-500 block mt-1">
+              Hotově: {formatCents(report.cashTipsCents)} • Kartou: {formatCents(report.cardTipsCents)}
+            </span>
+          </div>
+        </div>
+
+        {/* Hotovost celkem */}
         <div className="bg-white p-5 rounded-2xl border border-parchment-300 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs font-bold uppercase text-ink-600">
-            <span>Platby v hotovosti</span>
+            <span>Hotovost v zásuvce</span>
             <div className="p-2 bg-tea-50 rounded-xl text-tea-600">
               <Banknote className="w-5 h-5" />
             </div>
@@ -170,14 +191,16 @@ export const ReportsView: React.FC = () => {
             <span className="text-2xl font-black text-ink-800">
               {formatCents(report.cashPaymentsCents)}
             </span>
-            <span className="text-xs text-ink-400 block mt-1">V pokladní zásuvce</span>
+            <span className="text-xs text-ink-400 block mt-1">
+              (vč. {formatCents(report.cashTipsCents)} hotovostního dýška)
+            </span>
           </div>
         </div>
 
-        {/* Karta */}
+        {/* Karta celkem */}
         <div className="bg-white p-5 rounded-2xl border border-parchment-300 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between text-xs font-bold uppercase text-ink-600">
-            <span>Platby kartou</span>
+            <span>Karta (bankovní účet)</span>
             <div className="p-2 bg-tea-50 rounded-xl text-tea-600">
               <CreditCard className="w-5 h-5" />
             </div>
@@ -186,26 +209,22 @@ export const ReportsView: React.FC = () => {
             <span className="text-2xl font-black text-ink-800">
               {formatCents(report.cardPaymentsCents)}
             </span>
-            <span className="text-xs text-ink-400 block mt-1">Na bankovní účet</span>
+            <span className="text-xs text-ink-400 block mt-1">
+              (vč. {formatCents(report.cardTipsCents)} kartového dýška)
+            </span>
           </div>
         </div>
+      </div>
 
-        {/* Neuhrazené otevřené účty */}
-        <div className="bg-white p-5 rounded-2xl border border-amberGold-500/40 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-amberGold-600">
-            <span>Neuhrazené účty (dluh)</span>
-            <div className="p-2 bg-amberGold-500/10 rounded-xl text-amberGold-600">
-              <AlertCircle className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <span className="text-2xl font-black text-amberGold-600">
-              {formatCents(report.unpaidReceivablesCents)}
-            </span>
-            <span className="text-xs text-ink-400 block mt-1">
-              Otevřené účty hostů na stolech
-            </span>
-          </div>
+      {/* Další souhrnné ukazatele */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="bg-white p-4 rounded-2xl border border-parchment-300 text-xs flex justify-between items-center text-ink-700">
+          <span>Čistá hodnota prodaného zboží za den:</span>
+          <span className="font-bold text-sm text-ink-900">{formatCents(report.soldItemsValueCents)}</span>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-parchment-300 text-xs flex justify-between items-center text-ink-700">
+          <span>Neuhrazené účty hostů na stolech (dluh):</span>
+          <span className="font-bold text-sm text-amberGold-600">{formatCents(report.unpaidReceivablesCents)}</span>
         </div>
       </div>
 

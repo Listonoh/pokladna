@@ -28,7 +28,7 @@ export function formatCents(cents: number): string {
 }
 
 /**
- * Vypočítá finanční bilanci objednávky a stavy doručení.
+ * Vypočítá finanční bilanci objednávky, spropitné a stavy doručení.
  */
 export function calculateOrder(items: OrderItem[], payments: Payment[]): OrderCalculation {
   // Aktivní položky (nepočítáme stornované)
@@ -41,6 +41,7 @@ export function calculateOrder(items: OrderItem[], payments: Payment[]): OrderCa
   // Platné platby (nepočítáme stornované)
   const activePayments = payments.filter((p) => p.status === 'completed');
 
+  // Částka za zboží
   const totalCashCents = activePayments
     .filter((p) => p.payment_method === 'cash')
     .reduce((acc, p) => acc + p.amount_cents, 0);
@@ -49,8 +50,21 @@ export function calculateOrder(items: OrderItem[], payments: Payment[]): OrderCa
     .filter((p) => p.payment_method === 'card')
     .reduce((acc, p) => acc + p.amount_cents, 0);
 
+  // Spropitné / dýška
+  const totalCashTipsCents = activePayments
+    .filter((p) => p.payment_method === 'cash')
+    .reduce((acc, p) => acc + (p.tip_amount_cents || 0), 0);
+
+  const totalCardTipsCents = activePayments
+    .filter((p) => p.payment_method === 'card')
+    .reduce((acc, p) => acc + (p.tip_amount_cents || 0), 0);
+
+  const totalTipsCents = totalCashTipsCents + totalCardTipsCents;
   const paidCents = totalCashCents + totalCardCents;
   const remainingCents = Math.max(0, totalCents - paidCents);
+
+  const totalReceivedCashCents = totalCashCents + totalCashTipsCents;
+  const totalReceivedCardCents = totalCardCents + totalCardTipsCents;
 
   const pendingDeliveryCount = activeItems.filter((i) => i.delivery_status === 'pending')
     .reduce((acc, i) => acc + i.quantity, 0);
@@ -63,9 +77,14 @@ export function calculateOrder(items: OrderItem[], payments: Payment[]): OrderCa
   return {
     totalCents,
     paidCents,
+    totalTipsCents,
     remainingCents,
     totalCashCents,
     totalCardCents,
+    totalCashTipsCents,
+    totalCardTipsCents,
+    totalReceivedCashCents,
+    totalReceivedCardCents,
     pendingDeliveryCount,
     deliveredCount,
     isFullyPaid,
@@ -74,29 +93,37 @@ export function calculateOrder(items: OrderItem[], payments: Payment[]): OrderCa
 
 /**
  * Validace přijetí platby - striktně odmítne platbu vyšší než zbývající dluh
- * nebo neplatnou částku (<= 0).
+ * nebo neplatnou částku (<= 0) pro cenu položek.
  */
 export function validatePaymentAmount(
   remainingCents: number,
-  paymentAmountCents: number
+  baseItemAmountCents: number,
+  tipAmountCents = 0
 ): { valid: boolean; error?: string } {
-  if (paymentAmountCents <= 0) {
-    return { valid: false, error: 'Částka k úhradě musí být větší než 0 Kč.' };
+  if (baseItemAmountCents <= 0) {
+    return { valid: false, error: 'Částka za položky musí být větší než 0 Kč.' };
   }
-  if (paymentAmountCents > remainingCents) {
+  if (baseItemAmountCents > remainingCents) {
     return {
       valid: false,
-      error: `Nelze uhradit více než zbývající dluh (${formatCents(remainingCents)}). Požadováno: ${formatCents(paymentAmountCents)}.`,
+      error: `Nelze uhradit více než zbývající dluh (${formatCents(remainingCents)}). Požadováno: ${formatCents(baseItemAmountCents)}.`,
     };
+  }
+  if (tipAmountCents < 0) {
+    return { valid: false, error: 'Spropitné nemůže být záporné.' };
   }
   return { valid: true };
 }
 
 export interface DailyReportSummary {
   date: string; // YYYY-MM-DD
-  totalPaymentsCents: number;
-  cashPaymentsCents: number;
-  cardPaymentsCents: number;
+  totalPaymentsCents: number; // Celkem přijaté peníze (položky + spropitné)
+  normalSalesCents: number; // Čisté tržby za prodané zboží
+  totalTipsCents: number; // Spropitné celkem
+  cashTipsCents: number; // Spropitné v hotovosti
+  cardTipsCents: number; // Spropitné kartou
+  cashPaymentsCents: number; // Celková hotovost (zboží + spropitné)
+  cardPaymentsCents: number; // Celková karta (zboží + spropitné)
   completedOrdersCount: number;
   openOrdersCount: number;
   unpaidReceivablesCents: number;
@@ -120,8 +147,7 @@ export function getLocalDateString(isoDateStr: string, timeZone = 'Europe/Prague
 }
 
 /**
- * Sestaví denní report s přesným rozdělením podle času přijetí platby a času prodeje.
- * Správně ošetřuje půlnoční předěl i rozdíl mezi prodaným zbožím a skutečně přijatými penězi.
+ * Sestaví denní report s oddělením tržeb za zboží, spropitného a platebních metod.
  */
 export function generateDailyReport(
   targetDate: string, // YYYY-MM-DD
@@ -137,14 +163,28 @@ export function generateDailyReport(
     return p.status === 'completed' && getLocalDateString(p.created_at, timeZone) === targetDate;
   });
 
-  const cashPaymentsCents = dayPayments
+  const normalSalesCashCents = dayPayments
     .filter((p) => p.payment_method === 'cash')
     .reduce((sum, p) => sum + p.amount_cents, 0);
 
-  const cardPaymentsCents = dayPayments
+  const normalSalesCardCents = dayPayments
     .filter((p) => p.payment_method === 'card')
     .reduce((sum, p) => sum + p.amount_cents, 0);
 
+  const normalSalesCents = normalSalesCashCents + normalSalesCardCents;
+
+  const cashTipsCents = dayPayments
+    .filter((p) => p.payment_method === 'cash')
+    .reduce((sum, p) => sum + (p.tip_amount_cents || 0), 0);
+
+  const cardTipsCents = dayPayments
+    .filter((p) => p.payment_method === 'card')
+    .reduce((sum, p) => sum + (p.tip_amount_cents || 0), 0);
+
+  const totalTipsCents = cashTipsCents + cardTipsCents;
+
+  const cashPaymentsCents = normalSalesCashCents + cashTipsCents;
+  const cardPaymentsCents = normalSalesCardCents + cardTipsCents;
   const totalPaymentsCents = cashPaymentsCents + cardPaymentsCents;
 
   // 2. Položky prodané v daný den (dle vytvoření položky)
@@ -211,6 +251,10 @@ export function generateDailyReport(
   return {
     date: targetDate,
     totalPaymentsCents,
+    normalSalesCents,
+    totalTipsCents,
+    cashTipsCents,
+    cardTipsCents,
     cashPaymentsCents,
     cardPaymentsCents,
     completedOrdersCount,

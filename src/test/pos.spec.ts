@@ -128,7 +128,6 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
   // 6. Kombinovaná platba hotově a kartou
   it('6. Kombinovaná platba (hotově + kartou) správně eviduje obě části', async () => {
     const order = await posService.getOrCreateOrderForTable(null);
-    // Vytvoříme účet za 500 Kč (50000 haléřů)
     const mockProduct: Product = {
       id: 'mock-p500',
       category_id: 'cat-teas',
@@ -301,14 +300,12 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
 
   // 15. Správné vykázání plateb kolem půlnoci v Europe/Prague
   it('15. Správné vykázání plateb kolem půlnočního předělu v časovém pásmu Europe/Prague', async () => {
-    // 23:55 v Praze (zimní čas UTC+1 -> 22:55Z)
     const lateEveningPrague = '2026-10-14T21:55:00.000Z'; // v Praze 23:55
     const earlyMorningPrague = '2026-10-14T22:05:00.000Z'; // v Praze 00:05 další den (2026-10-15)
 
     expect(getLocalDateString(lateEveningPrague, 'Europe/Prague')).toBe('2026-10-14');
     expect(getLocalDateString(earlyMorningPrague, 'Europe/Prague')).toBe('2026-10-15');
 
-    // Vytvoříme objednávku pozdě večer a zaplatíme ji po půlnoci
     const order = {
       id: 'order-midnight',
       table_id: null,
@@ -324,6 +321,7 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
       product_name_snapshot: sampleProduct1.name,
       unit_price_cents_snapshot: 9500,
       quantity: 1,
+      paid_quantity: 1,
       delivery_status: 'delivered' as const,
       created_at: lateEveningPrague,
       updated_at: lateEveningPrague,
@@ -332,6 +330,7 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
       id: 'payment-midnight',
       order_id: order.id,
       amount_cents: 9500,
+      tip_amount_cents: 0,
       payment_method: 'card' as const,
       status: 'completed' as const,
       created_at: earlyMorningPrague,
@@ -340,7 +339,6 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
     const categoriesMap = new Map([['cat-teas', 'Čaje']]);
     const prodCatMap = new Map([[sampleProduct1.id, 'cat-teas']]);
 
-    // Report pro 14.10.: Položka byla prodána, ale platba ještě nepřišla
     const report14 = generateDailyReport(
       '2026-10-14',
       [order],
@@ -350,9 +348,8 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
       prodCatMap
     );
     expect(report14.soldItemsValueCents).toBe(9500);
-    expect(report14.totalPaymentsCents).toBe(0); // platba proběhla až zítra
+    expect(report14.totalPaymentsCents).toBe(0);
 
-    // Report pro 15.10.: Platba přišla v 00:05
     const report15 = generateDailyReport(
       '2026-10-15',
       [order],
@@ -363,7 +360,7 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
     );
     expect(report15.totalPaymentsCents).toBe(9500);
     expect(report15.cardPaymentsCents).toBe(9500);
-    expect(report15.soldItemsValueCents).toBe(0); // položka byla zařazena včera
+    expect(report15.soldItemsValueCents).toBe(0);
   });
 
   // 16. Obnova dat po obnovení stránky
@@ -372,7 +369,6 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
     const order = await posService.getOrCreateOrderForTable(table.id);
     await posService.addItemToOrder(order.id, sampleProduct1, 2);
 
-    // Simulace obnovy stránky: dotaz na existující objednávku stolu
     const restoredOrder = await posService.getOrCreateOrderForTable(table.id);
     expect(restoredOrder.id).toBe(order.id);
 
@@ -388,7 +384,7 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
     await posService.recordPayment(order.id, sampleProduct1.price_cents, 'cash');
 
     const outboxItems = await db.sync_outbox.toArray();
-    expect(outboxItems.length).toBeGreaterThanOrEqual(3); // order + item + payment
+    expect(outboxItems.length).toBeGreaterThanOrEqual(3);
     expect(outboxItems.some((i) => i.entity === 'payments')).toBe(true);
     expect(outboxItems.every((i) => ['pending', 'synced', 'failed'].includes(i.status))).toBe(true);
   });
@@ -396,18 +392,15 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
   // 18. Opakování synchronizace bez vytváření duplicit
   it('18. Opakování synchronizace je bezpečné díky klientskému idempotentnímu ID', async () => {
     const order = await posService.getOrCreateOrderForTable(null);
-    // Přidáme produkt, aby objednávka měla dluh k úhradě
-    await posService.addItemToOrder(order.id, sampleProduct1, 1); // 95 Kč (9500 hal)
+    await posService.addItemToOrder(order.id, sampleProduct1, 1);
 
     const fixedId = 'test-fixed-payment-uuid';
     await posService.recordPayment(order.id, 5000, 'cash', fixedId);
 
-    // Zkontrolujeme položku v outboxu
     const outboxItem = await db.sync_outbox.get(fixedId);
     expect(outboxItem).toBeTruthy();
     expect(outboxItem?.id).toBe(fixedId);
 
-    // Simulace opakovaného zařazení do outboxu se stejným ID
     await syncEngine.queueMutation('payments', 'insert', { id: fixedId }, fixedId);
 
     const allPaymentsInDb = await db.payments.where({ id: fixedId }).toArray();
@@ -419,7 +412,6 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
     const order = await posService.getOrCreateOrderForTable(null);
     await posService.addItemToOrder(order.id, sampleProduct1, 1); // 95 Kč
     await posService.addItemToOrder(order.id, sampleProduct2, 1); // 55 Kč
-    // Celkem 150 Kč
 
     await posService.recordPayment(order.id, 10000, 'cash');
     await posService.recordPayment(order.id, 5000, 'card');
@@ -438,11 +430,85 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
       new Map()
     );
 
-    // Kontrola matematických invariantů
     expect(report.totalPaymentsCents).toBe(report.cashPaymentsCents + report.cardPaymentsCents);
     expect(report.totalPaymentsCents).toBe(15000);
     expect(report.soldItemsValueCents).toBe(15000);
     expect(report.unpaidReceivablesCents).toBe(0);
     expect(formatCents(report.totalPaymentsCents)).toBe('150 Kč');
+  });
+
+  // 20. Evidence a oddělení spropitného (tips) v databázi
+  it('20. Evidence spropitného (tips): v DB se striktně oddělí běžná cena položek a dýško', async () => {
+    const order = await posService.getOrCreateOrderForTable(null);
+    await posService.addItemToOrder(order.id, sampleProduct1, 1); // 95 Kč (9500 haléřů)
+
+    // Host platí 100 Kč kartou (95 Kč čaj + 5 Kč dýško)
+    const payment = await posService.recordPayment(order.id, 9500, 'card', {
+      tipAmountCents: 500,
+    });
+
+    expect(payment.amount_cents).toBe(9500); // Normální cena
+    expect(payment.tip_amount_cents).toBe(500); // Dýško
+
+    // V DB je platba uložena s odděleným dýškem
+    const paymentInDb = (await db.payments.get(payment.id))!;
+    expect(paymentInDb.amount_cents).toBe(9500);
+    expect(paymentInDb.tip_amount_cents).toBe(500);
+
+    // Výpočet objednávky: zbývající dluh je 0 Kč, dýško je 5 Kč
+    const items = await db.order_items.where({ order_id: order.id }).toArray();
+    const payments = await db.payments.where({ order_id: order.id }).toArray();
+    const calc = calculateOrder(items, payments);
+
+    expect(calc.remainingCents).toBe(0);
+    expect(calc.paidCents).toBe(9500);
+    expect(calc.totalTipsCents).toBe(500);
+    expect(calc.totalReceivedCardCents).toBe(10000); // 100 Kč
+    expect(calc.isFullyPaid).toBe(true);
+
+    // Denní statistika vykáže správně tržbu za zboží i dýška
+    const today = getLocalDateString(new Date().toISOString());
+    const report = generateDailyReport(today, [order], items, payments, new Map(), new Map());
+    expect(report.normalSalesCents).toBe(9500);
+    expect(report.totalTipsCents).toBe(500);
+    expect(report.cardTipsCents).toBe(500);
+    expect(report.totalPaymentsCents).toBe(10000);
+  });
+
+  // 21. Výběr konkrétních položek k úhradě s dýškem
+  it('21. Výběr konkrétních položek k úhradě (např. host platí jen 1 čaj ze 2) s dýškem', async () => {
+    const order = await posService.getOrCreateOrderForTable(null);
+    const item1 = await posService.addItemToOrder(order.id, sampleProduct1, 2); // 2 × 95 = 190 Kč
+    const item2 = await posService.addItemToOrder(order.id, sampleProduct2, 1); // 1 × 55 = 55 Kč
+    // Celkem účet 245 Kč
+
+    // Host A platí pouze 1× Sencha (95 Kč) a dává 100 Kč v hotovosti (5 Kč dýško)
+    await posService.recordPayment(order.id, 9500, 'cash', {
+      tipAmountCents: 500,
+      paidItems: [
+        {
+          order_item_id: item1.id,
+          product_name: item1.product_name_snapshot,
+          unit_price_cents: item1.unit_price_cents_snapshot,
+          quantity: 1,
+          total_cents: 9500,
+        },
+      ],
+    });
+
+    // Kontrola aktualizace paid_quantity na položce 1
+    const updatedItem1 = (await db.order_items.get(item1.id))!;
+    expect(updatedItem1.paid_quantity).toBe(1); // 1 ze 2 ks zaplacen
+
+    const updatedItem2 = (await db.order_items.get(item2.id))!;
+    expect(updatedItem2.paid_quantity).toBe(0); // nezaplaceno
+
+    // Zůstatek k úhradě za zbytek účtu: 245 - 95 = 150 Kč
+    const items = await db.order_items.where({ order_id: order.id }).toArray();
+    const payments = await db.payments.where({ order_id: order.id }).toArray();
+    const calc = calculateOrder(items, payments);
+
+    expect(calc.remainingCents).toBe(15000); // 150 Kč zbývá doplatit
+    expect(calc.isFullyPaid).toBe(false);
   });
 });

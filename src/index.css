@@ -7,17 +7,24 @@
   color-scheme: light;
 }
 
-/* Zákaz nežádoucího zoomování a horizontálního posunu */
+/* Zajištění plynulého vertikálního posunu na dotykových displejích a prevence zoomu */
 html, body {
-  touch-action: manipulation;
+  touch-action: pan-y manipulation;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
   overflow: hidden;
   height: 100%;
+  width: 100%;
 }
 
-/* Vyloučení šedého zvýraznění při klepnutí na iOS/Androidu */
+/* Plynulý touch scroll na iOS a Androidu */
+.overflow-y-auto, .overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+/* Vyloučení šedého zvýraznění při klepnutí */
 * {
   -webkit-tap-highlight-color: transparent;
 }
