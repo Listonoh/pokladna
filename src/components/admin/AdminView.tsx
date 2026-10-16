@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../../db/posDatabase';
+import { db, clearTransactionsOnly, resetEntireDatabase } from '../../db/posDatabase';
 import { syncEngine } from '../../api/syncEngine';
 import { generateUUID } from '../../domain/posService';
 import { Product, Category } from '../../domain/types';
 import { formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
-import { Plus, Edit2, Star, Check, X, Eye, EyeOff } from 'lucide-react';
+import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle } from 'lucide-react';
 
 export const AdminView: React.FC = () => {
   const categories: Category[] = useLiveQuery(() => db.categories.orderBy('sort_order').toArray()) ?? [];
@@ -183,6 +183,97 @@ export const AdminView: React.FC = () => {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Správa lokální databáze & Vývoj / Testování */}
+      <div className="bg-white rounded-2xl border border-parchment-300 shadow-sm p-5 space-y-4">
+        <div className="flex items-center space-x-3 border-b border-parchment-200 pb-3">
+          <div className="p-2 bg-amberGold-100 text-amberGold-700 rounded-xl">
+            <Database className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="font-bold text-sm text-ink-900">Správa lokální databáze & Testování</h3>
+            <p className="text-xs text-ink-500">
+              Nástroje pro čištění testovacích dat a řešení konfliktů při změnách schématu
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+          {/* 1. Smazat pouze transakce */}
+          <div className="bg-parchment-50 rounded-xl p-4 border border-parchment-200 flex flex-col justify-between">
+            <div className="space-y-1 mb-4">
+              <h4 className="text-xs font-bold text-ink-900 uppercase">Smazat pouze transakce</h4>
+              <p className="text-xs text-ink-600 leading-relaxed">
+                Vymaže otevřené i zaplacené účty, položky na stolech, platby a frontu synchronizace. Katalog produktů a stolů zůstane zachován.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                if (window.confirm('Opravdu chcete vymazat všechny účty, položky a platby? Nabídka produktů a stoly zůstanou nedotčeny.')) {
+                  await clearTransactionsOnly();
+                  await syncEngine.updatePendingCount();
+                  alert('Testovací transakce a fronta byly úspěšně vymazány.');
+                }
+              }}
+              className="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-parchment-300 text-ink-800 hover:bg-parchment-200 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-amberGold-600" />
+              <span>Vymazat testovací transakce</span>
+            </button>
+          </div>
+
+          {/* 2. Vyčistit frontu syncu */}
+          <div className="bg-parchment-50 rounded-xl p-4 border border-parchment-200 flex flex-col justify-between">
+            <div className="space-y-1 mb-4">
+              <h4 className="text-xs font-bold text-ink-900 uppercase">Vyčistit pouze frontu syncu</h4>
+              <p className="text-xs text-ink-600 leading-relaxed">
+                Zahodí položky čekající na odeslání do Supabase. Užitečné, když se změnilo schéma databáze na serveru a staré testovací změny selhávají.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                if (window.confirm('Opravdu chcete vyprázdnit frontu synchronizace?')) {
+                  await syncEngine.clearOutbox();
+                  alert('Fronta synchronizace byla vyprázdněna.');
+                }
+              }}
+              className="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-parchment-300 text-ink-800 hover:bg-parchment-200 transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-blue-600" />
+              <span>Vyprázdnit Outbox</span>
+            </button>
+          </div>
+
+          {/* 3. Kompletní reset databáze */}
+          <div className="bg-rose-50/50 rounded-xl p-4 border border-rose-200 flex flex-col justify-between">
+            <div className="space-y-1 mb-4">
+              <h4 className="text-xs font-bold text-rose-900 uppercase flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                <span>Kompletní reset databáze</span>
+              </h4>
+              <p className="text-xs text-rose-700/80 leading-relaxed">
+                Vymaže úplně celou lokální IndexedDB a obnoví výchozí demo nabídku čajovny (všechny produkty i stoly).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                if (window.confirm('POZOR: Tato akce smaže celou lokální databázi včetně případných nových produktů a obnoví výchozí stav. Pokračovat?')) {
+                  await resetEntireDatabase();
+                  await syncEngine.updatePendingCount();
+                  alert('Databáze byla kompletně obnovena do výchozího stavu.');
+                }
+              }}
+              className="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-600 text-white hover:bg-rose-700 shadow-sm transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Kompletní reset databáze</span>
+            </button>
+          </div>
         </div>
       </div>
 

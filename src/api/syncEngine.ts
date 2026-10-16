@@ -2,8 +2,81 @@ import { db } from '../db/posDatabase';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { SyncOutboxItem } from '../domain/types';
 
+/**
+ * Převede libovolnou chybu z PostgREST / Supabase / sítě na srozumitelnou zprávu.
+ */
+export function formatSyncError(err: unknown, entity?: string, action?: string): string {
+  if (!err) return 'Neznámá chyba při synchronizaci.';
+
+  if (typeof err === 'object') {
+    const anyErr = err as Record<string, unknown>;
+    const code = anyErr.code ? String(anyErr.code) : '';
+    const message = anyErr.message
+      ? String(anyErr.message)
+      : err instanceof Error
+      ? err.message
+      : '';
+    const details = anyErr.details ? String(anyErr.details) : '';
+    const hint = anyErr.hint ? String(anyErr.hint) : '';
+
+    // PostgreSQL 42501 - Row Level Security policy violation
+    if (code === '42501' || message.includes('row-level security') || message.includes('violates row-level security policy')) {
+      const targetTable = entity ? `do tabulky "${entity}"` : 'do databáze';
+      return `Chyba oprávnění (RLS 42501) při zápisu ${targetTable}: Supabase zamítl požadavek, protože RLS politika nepovoluje zápis pro roli 'anon' (veřejný klíč). V SQL Editoru na Supabase upravte politiky např.: ALTER POLICY "..." ON public.${entity || 'tabulka'} TO anon, authenticated; (Detail: ${message})`;
+    }
+
+    // PostgreSQL 22P02 - Neplatná syntaxe typu (např. UUID vs textové ID "tbl-4")
+    if (code === '22P02' || message.includes('invalid input syntax')) {
+      return `Chyba datového typu (22P02) u "${entity || ''}": Databáze na serveru má sloupec typu UUID, ale aplikace posílá textové ID (např. "${message.match(/"([^"]+)"/)?.[1] || 'tbl-4'}"). V Supabase SQL Editoru spusťte aktualizovanou migraci s typem TEXT. (Detail: ${message})`;
+    }
+
+    // PostgreSQL 23503 - Foreign key violation
+    if (code === '23503') {
+      return `Chyba integrity dat (23503 cizí klíč) u "${entity || ''}": Záznam odkazuje na položku, která v databázi ještě neexistuje. (Detail: ${message})`;
+    }
+
+    // PostgreSQL 23505 - Unique constraint violation
+    if (code === '23505') {
+      return `Konflikt duplicity (23505) u tabulky "${entity || ''}": Záznam již v databázi existuje. (Detail: ${message})`;
+    }
+
+    // Chyba sítě (offline / DNS / firewall)
+    if (
+      message === 'Failed to fetch' ||
+      message.includes('NetworkError') ||
+      message.includes('Failed to load resource') ||
+      message.includes('net::ERR_')
+    ) {
+      return 'Chyba sítě (Failed to fetch): Nepodařilo se navázat spojení se serverem Supabase. Zkontrolujte připojení k internetu nebo URL adresu v .env.';
+    }
+
+    // Obecná chyba z PostgREST
+    if (code || message) {
+      const parts: string[] = [];
+      if (code) parts.push(`[Kód ${code}]`);
+      if (entity) parts.push(`[${entity}${action ? `:${action}` : ''}]`);
+      if (message) parts.push(message);
+      if (details && details !== 'null') parts.push(`Detail: ${details}`);
+      if (hint && hint !== 'null') parts.push(`Nápověda: ${hint}`);
+      return parts.join(' ');
+    }
+
+    if (err instanceof Error) {
+      return err.message;
+    }
+
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+
+  return String(err);
+}
+
 export class SyncEngine {
-  private isProcessing = false;
+  public isProcessing = false;
   private listeners: Array<() => void> = [];
 
   public isOnline: boolean = typeof navigator !== 'undefined' ? navigator.onLine : true;
@@ -22,6 +95,7 @@ export class SyncEngine {
         this.isOnline = false;
         this.notify();
       });
+      this.updatePendingCount();
     }
   }
 
@@ -72,6 +146,32 @@ export class SyncEngine {
       .where('status')
       .anyOf(['pending', 'failed'])
       .count();
+
+    // Pokud existují selhané položky a nemáme nastavenou aktuální chybu, načteme poslední chybu z fronty
+    if (this.pendingCount > 0 && !this.lastError) {
+      const failedItems = await db.sync_outbox
+        .where('status')
+        .equals('failed')
+        .reverse()
+        .sortBy('updated_at');
+
+      if (failedItems.length > 0 && failedItems[0].error_message) {
+        this.lastError = failedItems[0].error_message;
+      }
+    } else if (this.pendingCount === 0) {
+      this.lastError = null;
+    }
+
+    this.notify();
+  }
+
+  /**
+   * Vyprázdní outbox frontu a resetuje chybový stav (např. při změně schématu nebo zahazování testovacích dat).
+   */
+  public async clearOutbox(): Promise<void> {
+    await db.sync_outbox.clear();
+    this.lastError = null;
+    await this.updatePendingCount();
     this.notify();
   }
 
@@ -83,12 +183,30 @@ export class SyncEngine {
     if (!this.isOnline) return;
 
     if (!isSupabaseConfigured || !supabase) {
-      // Supabase není nakonfigurován, data zůstávají spolehlivě v lokální IndexedDB
+      const url = import.meta.env.VITE_SUPABASE_URL;
+      const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      let reason = 'chybí konfigurace v .env';
+
+      if (!url && !key) {
+        reason = 'chybí VITE_SUPABASE_URL i VITE_SUPABASE_PUBLISHABLE_KEY v .env';
+      } else if (!url) {
+        reason = 'chybí VITE_SUPABASE_URL v .env';
+      } else if (!key) {
+        reason = 'chybí VITE_SUPABASE_PUBLISHABLE_KEY v .env';
+      } else if (url === 'https://your-project.supabase.co' || key === 'your-publishable-key-here') {
+        reason = 'v .env jsou zadány pouze výchozí vzorové hodnoty';
+      }
+
+      this.lastError = `Supabase není nakonfigurován (${reason}). Data zůstávají bezpečně uložena v lokální IndexedDB pokladny.`;
+      console.warn(`[SyncEngine] ${this.lastError}`);
+      this.notify();
       return;
     }
 
     this.isProcessing = true;
     this.notify();
+
+    let hasFailures = false;
 
     try {
       const itemsToSync = await db.sync_outbox
@@ -128,8 +246,9 @@ export class SyncEngine {
             updated_at: new Date().toISOString(),
           });
         } catch (err: unknown) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          console.error(`[SyncEngine] Chyba synchronizace položky ${item.id}:`, errorMsg);
+          hasFailures = true;
+          const errorMsg = formatSyncError(err, item.entity, item.action);
+          console.error(`[SyncEngine] Chyba synchronizace položky (${item.entity}/${item.action} ID: ${item.id}):`, errorMsg, err);
           this.lastError = errorMsg;
 
           await db.sync_outbox.update(item.id, {
@@ -142,6 +261,13 @@ export class SyncEngine {
       }
 
       this.lastSyncTime = new Date();
+      if (!hasFailures) {
+        this.lastError = null;
+      }
+    } catch (globalErr: unknown) {
+      const globalErrorMsg = formatSyncError(globalErr);
+      console.error('[SyncEngine] Kritická chyba běhu synchronizace:', globalErrorMsg, globalErr);
+      this.lastError = globalErrorMsg;
     } finally {
       this.isProcessing = false;
       await this.updatePendingCount();

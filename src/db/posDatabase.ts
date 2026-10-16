@@ -199,3 +199,81 @@ export async function seedInitialDataIfEmpty(database: PosDatabase = db) {
   ];
   await database.products.bulkAdd(initialProducts);
 }
+
+/**
+ * Vymaže pouze transakční data (objednávky, položky, události, platby a frontu syncu).
+ * Zachová katalog produktů, kategorií a stolů.
+ */
+export async function clearTransactionsOnly(database: PosDatabase = db) {
+  await database.transaction('rw', [
+    database.orders,
+    database.order_items,
+    database.order_item_events,
+    database.payments,
+    database.payment_events,
+    database.sync_outbox,
+  ], async () => {
+    await database.orders.clear();
+    await database.order_items.clear();
+    await database.order_item_events.clear();
+    await database.payments.clear();
+    await database.payment_events.clear();
+    await database.sync_outbox.clear();
+  });
+}
+
+/**
+ * Vymaže pouze položky čekající ve frontě synchronizace (Outbox).
+ */
+export async function clearSyncOutbox(database: PosDatabase = db) {
+  await database.sync_outbox.clear();
+}
+
+/**
+ * Kompletně resetuje celou lokální databázi do výchozího stavu čajovny.
+ */
+export async function resetEntireDatabase(database: PosDatabase = db) {
+  await database.transaction('rw', [
+    database.categories,
+    database.products,
+    database.pos_tables,
+    database.orders,
+    database.order_items,
+    database.order_item_events,
+    database.payments,
+    database.payment_events,
+    database.sync_outbox,
+  ], async () => {
+    await database.categories.clear();
+    await database.products.clear();
+    await database.pos_tables.clear();
+    await database.orders.clear();
+    await database.order_items.clear();
+    await database.order_item_events.clear();
+    await database.payments.clear();
+    await database.payment_events.clear();
+    await database.sync_outbox.clear();
+  });
+  await seedInitialDataIfEmpty(database);
+}
+
+// Zpřístupnění v konzoli prohlížeče (DevTools Console) pro snadné testování
+if (typeof window !== 'undefined') {
+  const win = window as unknown as Record<string, unknown>;
+  win.db = db;
+  win.clearTransactions = async () => {
+    await clearTransactionsOnly();
+    console.log('%c[Pokladna] Transakce a fronta byly smazány.', 'color: #10b981; font-weight: bold;');
+    window.location.reload();
+  };
+  win.clearSyncOutbox = async () => {
+    await clearSyncOutbox();
+    console.log('%c[Pokladna] Fronta synchronizace byla vyprázdněna.', 'color: #10b981; font-weight: bold;');
+    window.location.reload();
+  };
+  win.resetDatabase = async () => {
+    await resetEntireDatabase();
+    console.log('%c[Pokladna] Databáze byla kompletně zresetována do výchozího stavu.', 'color: #10b981; font-weight: bold;');
+    window.location.reload();
+  };
+}
