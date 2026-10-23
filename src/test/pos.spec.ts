@@ -511,4 +511,45 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
     expect(calc.remainingCents).toBe(15000); // 150 Kč zbývá doplatit
     expect(calc.isFullyPaid).toBe(false);
   });
+
+  // 20. S sebou (takeout) nevytváří novou objednávku, dokud předchozí není uzavřená
+  it('20. S sebou nevytváří novou objednávku, dokud předchozí není uzavřená', async () => {
+    // 1. Založení objednávky s sebou a přidání položky
+    const takeout1 = await posService.getOrCreateOrderForTable(null);
+    expect(takeout1.table_id).toBeNull();
+    expect(takeout1.status).toBe('open');
+    await posService.addItemToOrder(takeout1.id, sampleProduct1, 1);
+
+    // 2. Opětovné zavolání getOrCreateOrderForTable(null) musí vrátit tutéž neuzavřenou objednávku
+    const reopenedTakeout = await posService.getOrCreateOrderForTable(null);
+    expect(reopenedTakeout.id).toBe(takeout1.id);
+    expect(reopenedTakeout.order_number).toBe(takeout1.order_number);
+
+    // 3. Objednávku zaplatíme v plné výši -> status přejde do 'paid'
+    await posService.recordPayment(takeout1.id, sampleProduct1.price_cents, 'cash');
+    const closedOrder = await db.orders.get(takeout1.id);
+    expect(closedOrder?.status).toBe('paid');
+
+    // 4. Nyní, když je předchozí s sebou uzavřená, getOrCreateOrderForTable(null) vytvoří novou objednávku
+    const takeout2 = await posService.getOrCreateOrderForTable(null);
+    expect(takeout2.id).not.toBe(takeout1.id);
+    expect(takeout2.status).toBe('open');
+  });
+
+  // 21. Zrušení objednávky (storno nebo smazání prázdné)
+  it('21. Zrušení objednávky smaže prázdný účet a stornuje účet s položkami', async () => {
+    // A) Prázdný účet
+    const emptyOrder = await posService.createNewTakeoutOrder();
+    await posService.cancelOrder(emptyOrder.id);
+    const deleted = await db.orders.get(emptyOrder.id);
+    expect(deleted).toBeUndefined();
+
+    // B) Účet s položkami
+    const orderWithItems = await posService.createNewTakeoutOrder();
+    await posService.addItemToOrder(orderWithItems.id, sampleProduct1, 1);
+    await posService.cancelOrder(orderWithItems.id, 'Zákazník odešel');
+    const cancelled = await db.orders.get(orderWithItems.id);
+    expect(cancelled?.status).toBe('cancelled');
+    expect(cancelled?.note).toContain('Zákazník odešel');
+  });
 });

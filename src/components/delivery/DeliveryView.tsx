@@ -35,7 +35,12 @@ export const DeliveryView: React.FC = () => {
   const getTableNameForOrder = (orderId: string): string => {
     const order = orders.find((o) => o.id === orderId);
     if (!order) return 'Neznámý stůl';
-    if (!order.table_id) return 'S sebou / Bez stolu';
+    if (!order.table_id) {
+      const num = order.order_number.includes('-')
+        ? order.order_number.split('-')[1]
+        : order.order_number;
+      return `S sebou #${num}`;
+    }
     const table = tables.find((t) => t.id === order.table_id);
     return table ? table.name : 'Stůl';
   };

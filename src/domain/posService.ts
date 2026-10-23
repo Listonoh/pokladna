@@ -44,7 +44,8 @@ export interface RecordPaymentOptions {
 export class PosService {
   /**
    * Získá existující otevřenou objednávku pro stůl, nebo vytvoří novou.
-   * Pro stůl null (S sebou) vytvoří vždy novou objednávku.
+   * Pro stůl null (S sebou) vrátí existující neuzavřenou objednávku s sebou,
+   * pokud existuje, aby se nevytvářely duplicity, dokud není předchozí uzavřena.
    */
   async getOrCreateOrderForTable(tableId: string | null): Promise<Order> {
     if (tableId) {
@@ -53,6 +54,14 @@ export class PosService {
         .first();
       if (existing) {
         return existing;
+      }
+    } else {
+      const openOrders = await db.orders.where('status').equals('open').toArray();
+      const existingTakeout = openOrders
+        .filter((o) => !o.table_id)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+      if (existingTakeout) {
+        return existingTakeout;
       }
     }
 
@@ -64,6 +73,29 @@ export class PosService {
     const newOrder: Order = {
       id: generateUUID(),
       table_id: tableId,
+      order_number: generateOrderNumber(todayOrdersCount),
+      status: 'open',
+      created_at: new Date().toISOString(),
+      closed_at: null,
+    };
+
+    await db.orders.add(newOrder);
+    await syncEngine.queueMutation('orders', 'insert', { ...newOrder }, newOrder.id);
+    return newOrder;
+  }
+
+  /**
+   * Vytvoří novou objednávku S sebou (table_id: null).
+   */
+  async createNewTakeoutOrder(): Promise<Order> {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayOrdersCount = await db.orders
+      .filter((o) => o.created_at.startsWith(todayStr))
+      .count();
+
+    const newOrder: Order = {
+      id: generateUUID(),
+      table_id: null,
       order_number: generateOrderNumber(todayOrdersCount),
       status: 'open',
       created_at: new Date().toISOString(),
@@ -459,6 +491,34 @@ export class PosService {
 
     const updatedPayment = (await db.payments.get(paymentId))!;
     await syncEngine.queueMutation('payments', 'update', { ...updatedPayment }, paymentId);
+  }
+
+  /**
+   * Zrušení / stornování celé objednávky.
+   * Pokud je objednávka zcela prázdná (bez položek i plateb), je rovnou smazána,
+   * aby nezanechávala prázdné duchy v databázi.
+   */
+  async cancelOrder(orderId: string, reason = 'Zrušeno obsluhou'): Promise<void> {
+    const order = await db.orders.get(orderId);
+    if (!order) return;
+
+    const itemsCount = await db.order_items.where({ order_id: orderId }).count();
+    const paymentsCount = await db.payments.where({ order_id: orderId }).count();
+
+    if (itemsCount === 0 && paymentsCount === 0) {
+      await db.orders.delete(orderId);
+      await syncEngine.queueMutation('orders', 'delete', { id: orderId }, orderId);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    await db.orders.update(orderId, {
+      status: 'cancelled',
+      note: order.note ? `${order.note} [Storno: ${reason}]` : `[Storno: ${reason}]`,
+      closed_at: now,
+    });
+    const updated = (await db.orders.get(orderId))!;
+    await syncEngine.queueMutation('orders', 'update', { ...updated }, orderId);
   }
 }
 

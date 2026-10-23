@@ -31,6 +31,8 @@ export const PosView: React.FC = () => {
 
   // Vybraný stůl (null = "S sebou / Bez stolu")
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
+  // Vybrané ID neuzavřené objednávky S sebou
+  const [selectedTakeoutOrderId, setSelectedTakeoutOrderId] = useState<string | null>(null);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
 
   // Filtrování kategorie
@@ -40,20 +42,40 @@ export const PosView: React.FC = () => {
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [editingItemNote, setEditingItemNote] = useState<OrderItem | null>(null);
 
-  // Načtení nebo založení objednávky pro stůl
+  // Neuzavřené objednávky S sebou
+  const openTakeoutOrders = openOrders.filter((o) => !o.table_id);
+
+  // Načtení nebo založení objednávky pro stůl či S sebou
   useEffect(() => {
     let isCancelled = false;
     async function loadOrder() {
-      const order = await posService.getOrCreateOrderForTable(selectedTableId);
-      if (!isCancelled) {
-        setCurrentOrder(order);
+      if (selectedTableId) {
+        const order = await posService.getOrCreateOrderForTable(selectedTableId);
+        if (!isCancelled) {
+          setCurrentOrder(order);
+        }
+      } else if (selectedTakeoutOrderId) {
+        const order = await db.orders.get(selectedTakeoutOrderId);
+        if (order && order.status === 'open' && !isCancelled) {
+          setCurrentOrder(order);
+        } else if (!isCancelled) {
+          const fallbackOrder = await posService.getOrCreateOrderForTable(null);
+          setSelectedTakeoutOrderId(fallbackOrder.id);
+          setCurrentOrder(fallbackOrder);
+        }
+      } else {
+        const order = await posService.getOrCreateOrderForTable(null);
+        if (!isCancelled) {
+          setSelectedTakeoutOrderId(order.id);
+          setCurrentOrder(order);
+        }
       }
     }
     loadOrder();
     return () => {
       isCancelled = true;
     };
-  }, [selectedTableId]);
+  }, [selectedTableId, selectedTakeoutOrderId]);
 
   // Položky a platby aktuální objednávky
   const currentItems = currentOrder
@@ -98,7 +120,11 @@ export const PosView: React.FC = () => {
 
   // Název stolu pro zobrazení
   const selectedTable = tables.find((t) => t.id === selectedTableId);
-  const tableNameDisplay = selectedTable ? selectedTable.name : 'S sebou / Bez stolu';
+  const tableNameDisplay = selectedTable
+    ? selectedTable.name
+    : currentOrder
+      ? `S sebou #${currentOrder.order_number.includes('-') ? currentOrder.order_number.split('-')[1] : currentOrder.order_number}`
+      : 'S sebou / Bez stolu';
 
   // Pomocná funkce pro zjištění stavu stolu
   const getTableStatus = (tableId: string) => {
@@ -118,23 +144,174 @@ export const PosView: React.FC = () => {
     return { state: 'open', label: 'Otevřený' };
   };
 
+  // Pomocná funkce pro zjištění stavu objednávky S sebou
+  const getTakeoutStatus = (order: Order) => {
+    const items = allOrderItems.filter((i) => i.order_id === order.id && i.delivery_status !== 'cancelled');
+    const payments = allPayments.filter((p) => p.order_id === order.id);
+    const orderCalc = calculateOrder(items, payments);
+
+    if (orderCalc.pendingDeliveryCount > 0) {
+      return { state: 'pending_delivery', label: `K doručení (${orderCalc.pendingDeliveryCount})` };
+    }
+    if (orderCalc.remainingCents > 0) {
+      return { state: 'has_balance', label: formatCents(orderCalc.remainingCents) };
+    }
+    if (items.length === 0) {
+      return { state: 'free', label: 'Prázdný' };
+    }
+    return { state: 'open', label: 'Otevřený' };
+  };
+
+  const handleSelectTable = (tableId: string) => {
+    setSelectedTableId(tableId);
+    setSelectedTakeoutOrderId(null);
+  };
+
+  const handleSelectTakeoutOrder = (order: Order) => {
+    setSelectedTableId(null);
+    setSelectedTakeoutOrderId(order.id);
+    setCurrentOrder(order);
+  };
+
+  const handleSelectTakeoutDefault = async () => {
+    setSelectedTableId(null);
+    if (selectedTakeoutOrderId && currentOrder?.id === selectedTakeoutOrderId && currentOrder?.status === 'open') {
+      return;
+    }
+    const order = await posService.getOrCreateOrderForTable(null);
+    setSelectedTakeoutOrderId(order.id);
+    setCurrentOrder(order);
+  };
+
+  const handleCreateNewTakeout = async () => {
+    // Pokud už existuje otevřená objednávka s sebou, která je zcela prázdná, přepneme na ni
+    const emptyTakeout = openTakeoutOrders.find((o) => {
+      const items = allOrderItems.filter((i) => i.order_id === o.id && i.delivery_status !== 'cancelled');
+      return items.length === 0;
+    });
+
+    if (emptyTakeout) {
+      setSelectedTableId(null);
+      setSelectedTakeoutOrderId(emptyTakeout.id);
+      setCurrentOrder(emptyTakeout);
+      return;
+    }
+
+    const newOrder = await posService.createNewTakeoutOrder();
+    setSelectedTableId(null);
+    setSelectedTakeoutOrderId(newOrder.id);
+    setCurrentOrder(newOrder);
+  };
+
+  const handleCancelOrder = async (orderId: string) => {
+    if (!window.confirm('Opravdu chcete tuto objednávku zrušit?')) {
+      return;
+    }
+    await posService.cancelOrder(orderId);
+    if (currentOrder?.id === orderId) {
+      if (selectedTableId) {
+        const nextOrder = await posService.getOrCreateOrderForTable(selectedTableId);
+        setCurrentOrder(nextOrder);
+      } else {
+        const remainingTakeouts = openTakeoutOrders.filter((o) => o.id !== orderId);
+        if (remainingTakeouts.length > 0) {
+          setSelectedTakeoutOrderId(remainingTakeouts[0].id);
+          setCurrentOrder(remainingTakeouts[0]);
+        } else {
+          setSelectedTakeoutOrderId(null);
+          const fresh = await posService.getOrCreateOrderForTable(null);
+          setSelectedTakeoutOrderId(fresh.id);
+          setCurrentOrder(fresh);
+        }
+      }
+    }
+  };
+
+  const handleOpenNewOrderAfterPaid = async () => {
+    if (selectedTableId) {
+      const order = await posService.getOrCreateOrderForTable(selectedTableId);
+      setCurrentOrder(order);
+    } else {
+      const newOrder = await posService.createNewTakeoutOrder();
+      setSelectedTakeoutOrderId(newOrder.id);
+      setCurrentOrder(newOrder);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-parchment-100">
-      {/* 1. Horní lišta stolů */}
+      {/* 1. Horní lišta stolů a S sebou */}
       <div className="bg-parchment-200/90 border-b border-parchment-300 px-4 py-2 overflow-x-auto flex items-center space-x-2 shrink-0">
-        {/* Tlačítko S sebou */}
-        <button
-          type="button"
-          onClick={() => setSelectedTableId(null)}
-          className={`flex flex-col items-center justify-center px-4 py-2 rounded-xl text-xs font-semibold shrink-0 min-w-[100px] border transition-all ${
-            selectedTableId === null
-              ? 'bg-tea-700 text-white border-tea-800 shadow-sm'
-              : 'bg-white text-ink-700 border-parchment-300 hover:bg-parchment-100'
-          }`}
-        >
-          <Coffee className="w-4 h-4 mb-0.5" />
-          <span>S sebou</span>
-        </button>
+        {/* Dlaždice neuzavřených objednávek S sebou */}
+        {openTakeoutOrders.length === 0 ? (
+          <button
+            type="button"
+            onClick={handleSelectTakeoutDefault}
+            className={`flex flex-col items-center justify-center px-4 py-1.5 rounded-xl text-xs font-semibold shrink-0 min-w-[110px] border transition-all ${
+              selectedTableId === null
+                ? 'bg-tea-700 text-white border-tea-800 shadow-sm'
+                : 'bg-white text-ink-700 border-parchment-300 hover:bg-parchment-100'
+            }`}
+          >
+            <div className="flex items-center gap-1.5">
+              <Coffee className="w-3.5 h-3.5" />
+              <span>S sebou</span>
+            </div>
+            <span className="text-[10px] px-2 py-0.5 rounded-full mt-0.5 bg-parchment-300 text-ink-600">
+              Nový účet
+            </span>
+          </button>
+        ) : (
+          openTakeoutOrders.map((order) => {
+            const status = getTakeoutStatus(order);
+            const isSelected = selectedTableId === null && currentOrder?.id === order.id;
+
+            let badgeColor = 'bg-parchment-300 text-ink-600';
+            if (status.state === 'pending_delivery') badgeColor = 'bg-amberGold-500 text-white font-bold';
+            if (status.state === 'has_balance') badgeColor = 'bg-tea-600 text-white font-bold';
+
+            const num = order.order_number.includes('-')
+              ? order.order_number.split('-')[1]
+              : order.order_number.slice(-3);
+
+            return (
+              <button
+                key={order.id}
+                type="button"
+                onClick={() => handleSelectTakeoutOrder(order)}
+                className={`flex flex-col items-center justify-center px-4 py-1.5 rounded-xl text-xs font-semibold shrink-0 min-w-[120px] border transition-all ${
+                  isSelected
+                    ? 'bg-tea-700 text-white border-tea-800 shadow-md ring-2 ring-tea-600/40'
+                    : 'bg-white text-ink-800 border-parchment-300 hover:bg-parchment-50'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 truncate max-w-[115px]">
+                  <Coffee className="w-3.5 h-3.5 shrink-0" />
+                  <span className="text-sm font-semibold truncate">S sebou #{num}</span>
+                </div>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full mt-0.5 ${badgeColor}`}>
+                  {status.label}
+                </span>
+              </button>
+            );
+          })
+        )}
+
+        {/* Tlačítko pro přidání další objednávky S sebou, pokud už nějaké existují */}
+        {openTakeoutOrders.length > 0 && (
+          <button
+            type="button"
+            onClick={handleCreateNewTakeout}
+            className="flex items-center justify-center gap-1 px-3 py-2.5 rounded-xl text-xs font-semibold shrink-0 border border-dashed border-tea-600/60 text-tea-700 bg-tea-50/50 hover:bg-tea-100/60 active:scale-95 transition-all"
+            title="Založit novou objednávku S sebou"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>S sebou</span>
+          </button>
+        )}
+
+        {/* Oddělovač */}
+        <div className="h-7 w-px bg-parchment-300 shrink-0 mx-1" />
 
         {/* Dlaždice stolů */}
         {tables.map((table) => {
@@ -149,7 +326,7 @@ export const PosView: React.FC = () => {
             <button
               key={table.id}
               type="button"
-              onClick={() => setSelectedTableId(table.id)}
+              onClick={() => handleSelectTable(table.id)}
               className={`flex flex-col items-center justify-center px-4 py-1.5 rounded-xl text-xs font-semibold shrink-0 min-w-[120px] border transition-all ${
                 isSelected
                   ? 'bg-tea-700 text-white border-tea-800 shadow-md ring-2 ring-tea-600/40'
@@ -264,11 +441,24 @@ export const PosView: React.FC = () => {
                 Účet #{currentOrder?.order_number || '---'}
               </span>
             </div>
-            {currentOrder?.status === 'paid' && (
-              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-tea-600 text-white flex items-center gap-1">
-                <Check className="w-3.5 h-3.5" /> Zaplaceno
-              </span>
-            )}
+            <div className="flex items-center gap-1.5">
+              {currentOrder && currentOrder.status === 'open' && (
+                <button
+                  type="button"
+                  onClick={() => handleCancelOrder(currentOrder.id)}
+                  className="px-2 py-1 text-xs text-ink-500 hover:text-terracotta-600 hover:bg-red-50 rounded border border-transparent hover:border-terracotta-200 transition-colors flex items-center gap-1"
+                  title="Stornovat nebo smazat tento účet"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Zrušit</span>
+                </button>
+              )}
+              {currentOrder?.status === 'paid' && (
+                <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-tea-600 text-white flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5" /> Zaplaceno
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Seznam položek účtu */}
@@ -280,6 +470,16 @@ export const PosView: React.FC = () => {
                 <p className="text-xs text-ink-400 mt-1">
                   Klepnutím na položku v nabídce ji přidáte do účtu.
                 </p>
+                {currentOrder && (
+                  <button
+                    type="button"
+                    onClick={() => handleCancelOrder(currentOrder.id)}
+                    className="mt-4 px-3 py-1.5 text-xs text-terracotta-600 hover:text-terracotta-700 hover:bg-red-50 border border-terracotta-200 rounded-lg flex items-center gap-1.5 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Zrušit tento prázdný účet</span>
+                  </button>
+                )}
               </div>
             ) : (
               currentItems.map((item) => {
@@ -420,16 +620,15 @@ export const PosView: React.FC = () => {
             ) : calc.totalCents > 0 ? (
               <button
                 type="button"
-                onClick={async () => {
-                  // Otevřít nový účet pro další hosty na tomto stole
-                  if (selectedTableId) {
-                    await posService.getOrCreateOrderForTable(selectedTableId);
-                  }
-                }}
+                onClick={handleOpenNewOrderAfterPaid}
                 className="w-full py-3 bg-tea-700 text-white rounded-xl font-bold text-sm shadow hover:bg-tea-800 transition-all flex items-center justify-center space-x-2"
               >
                 <UserCheck className="w-4 h-4" />
-                <span>Účet plně uhrazen • Založit nový pro stůl</span>
+                <span>
+                  {selectedTableId
+                    ? 'Účet plně uhrazen • Založit nový pro stůl'
+                    : 'Účet plně uhrazen • Založit nový S sebou'}
+                </span>
               </button>
             ) : null}
           </div>
