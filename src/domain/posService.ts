@@ -436,6 +436,54 @@ export class PosService {
   }
 
   /**
+   * Úprava existující platby (např. změna způsobu úhrady hotovost <-> karta, úprava spropitného).
+   */
+  async updatePayment(
+    paymentId: string,
+    updates: {
+      paymentMethod?: PaymentMethod;
+      tipAmountCents?: number;
+    }
+  ): Promise<Payment> {
+    const payment = await db.payments.get(paymentId);
+    if (!payment) {
+      throw new Error('Platba nebyla nalezena.');
+    }
+    if (payment.status === 'cancelled') {
+      throw new Error('Nelze upravovat stornovanou platbu.');
+    }
+
+    const newMethod = updates.paymentMethod ?? payment.payment_method;
+    const newTipCents =
+      updates.tipAmountCents !== undefined
+        ? Math.max(0, updates.tipAmountCents)
+        : payment.tip_amount_cents;
+
+    await db.payments.update(paymentId, {
+      payment_method: newMethod,
+      tip_amount_cents: newTipCents,
+    });
+
+    const event: PaymentEvent = {
+      id: generateUUID(),
+      payment_id: paymentId,
+      event_type: 'updated',
+      metadata: {
+        previousMethod: payment.payment_method,
+        newMethod,
+        previousTipCents: payment.tip_amount_cents,
+        newTipCents,
+      },
+      created_at: new Date().toISOString(),
+    };
+    await db.payment_events.add(event);
+
+    const updatedPayment = (await db.payments.get(paymentId))!;
+    await syncEngine.queueMutation('payments', 'update', { ...updatedPayment }, paymentId);
+    return updatedPayment;
+  }
+
+  /**
    * Bezpečné storno platby.
    */
   async cancelPayment(paymentId: string, reason: string): Promise<void> {

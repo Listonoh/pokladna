@@ -109,7 +109,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const handleApplyTipPreset = (additionalCzk: number) => {
     const baseCzk = centsToCzk(selectedItemsCostCents);
-    setTotalEnteredCzk(String(baseCzk + additionalCzk));
+    const currentCzk = Number(totalEnteredCzk) || baseCzk;
+
+    setTotalEnteredCzk(String(currentCzk + additionalCzk));
     setErrorMessage(null);
   };
 
@@ -220,9 +222,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                 return (
                   <div
                     key={item.id}
-                    className={`py-2 px-2 rounded-lg flex items-center justify-between transition-colors ${
-                      isSelected ? 'bg-tea-50/60' : 'opacity-60 hover:bg-parchment-50'
-                    }`}
+                    className={`py-2 px-2 rounded-lg flex items-center justify-between transition-colors ${isSelected ? 'bg-tea-50/60' : 'opacity-60 hover:bg-parchment-50'
+                      }`}
                   >
                     <div className="flex items-center space-x-2.5 flex-1 mr-2">
                       <input
@@ -297,28 +298,44 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                   setTotalEnteredCzk(e.target.value);
                   setErrorMessage(null);
                 }}
-                className={`w-full text-2xl font-black py-2.5 px-4 rounded-xl border-2 text-right bg-white ${
-                  isUnderpaid
-                    ? 'border-terracotta-500 text-terracotta-500 focus:ring-terracotta-500'
-                    : 'border-tea-600 text-ink-900 focus:outline-none'
-                }`}
+                className={`w-full text-2xl font-black py-2.5 px-4 rounded-xl border-2 text-right bg-white ${isUnderpaid
+                  ? 'border-terracotta-500 text-terracotta-500 focus:ring-terracotta-500'
+                  : 'border-tea-600 text-ink-900 focus:outline-none'
+                  }`}
               />
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-ink-400 font-bold">
                 Celkem přijato (Kč):
               </span>
             </div>
 
-            {/* Rychlá tlačítka pro spropitné */}
+            {/* Rychlá tlačítka pro spropitné a zaokrouhlení */}
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
               <span className="text-xs text-ink-500 mr-1 flex items-center gap-1 font-semibold">
                 <Heart className="w-3.5 h-3.5 text-amberGold-500" /> Dýško:
               </span>
               <button
                 type="button"
-                onClick={() => setTotalEnteredCzk(String(centsToCzk(selectedItemsCostCents)))}
+                onClick={() => {
+                  setTotalEnteredCzk(String(centsToCzk(selectedItemsCostCents)));
+                  setErrorMessage(null);
+                }}
                 className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-parchment-50 hover:bg-parchment-200 text-ink-700"
               >
                 +0 Kč
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTipPreset(1)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-white hover:bg-parchment-200 text-ink-700"
+              >
+                +1 Kč
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTipPreset(5)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-white hover:bg-parchment-200 text-ink-700"
+              >
+                +5 Kč
               </button>
               <button
                 type="button"
@@ -329,17 +346,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => handleApplyTipPreset(20)}
-                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-white hover:bg-parchment-200 text-ink-700"
+                onClick={() => handleRoundTo(10)}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-tea-300 bg-tea-50 text-tea-800 hover:bg-tea-100"
               >
-                +20 Kč
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplyTipPreset(50)}
-                className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-white hover:bg-parchment-200 text-ink-700"
-              >
-                +50 Kč
+                Zaokrouhlit na 10 Kč
               </button>
               <button
                 type="button"
@@ -379,11 +389,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             <button
               type="button"
               onClick={() => setPaymentMethod('cash')}
-              className={`flex items-center justify-center space-x-2 py-3 px-4 rounded-xl font-semibold border-2 transition-all ${
-                paymentMethod === 'cash'
-                  ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
-                  : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
-              }`}
+              className={`flex items-center justify-center space-x-2 py-3 px-4 rounded-xl font-semibold border-2 transition-all ${paymentMethod === 'cash'
+                ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
+                : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
+                }`}
             >
               <Banknote className="w-5 h-5 text-tea-600" />
               <span>Hotově</span>
@@ -392,11 +401,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             <button
               type="button"
               onClick={() => setPaymentMethod('card')}
-              className={`flex items-center justify-center space-x-2 py-3 px-4 rounded-xl font-semibold border-2 transition-all ${
-                paymentMethod === 'card'
-                  ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
-                  : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
-              }`}
+              className={`flex items-center justify-center space-x-2 py-3 px-4 rounded-xl font-semibold border-2 transition-all ${paymentMethod === 'card'
+                ? 'border-tea-600 bg-tea-50 text-tea-800 shadow-sm'
+                : 'border-parchment-300 bg-white text-ink-600 hover:bg-parchment-50'
+                }`}
             >
               <CreditCard className="w-5 h-5 text-tea-600" />
               <span>Kartou</span>
@@ -434,11 +442,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               type="button"
               onClick={handleConfirm}
               disabled={isSubmitting || isNoItemSelected || isUnderpaid}
-              className={`flex items-center space-x-1.5 px-5 py-2.5 rounded-xl font-bold text-xs text-white shadow-md transition-all ${
-                isSubmitting || isNoItemSelected || isUnderpaid
-                  ? 'bg-ink-300 cursor-not-allowed'
-                  : 'bg-tea-600 hover:bg-tea-700 active:scale-[0.98]'
-              }`}
+              className={`flex items-center space-x-1.5 px-5 py-2.5 rounded-xl font-bold text-xs text-white shadow-md transition-all ${isSubmitting || isNoItemSelected || isUnderpaid
+                ? 'bg-ink-300 cursor-not-allowed'
+                : 'bg-tea-600 hover:bg-tea-700 active:scale-[0.98]'
+                }`}
             >
               <CheckCircle className="w-4 h-4" />
               <span>{isSubmitting ? 'Ukládám...' : `Zaúčtovat platbu (${formatCents(enteredTotalCents)})`}</span>

@@ -3,9 +3,11 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/posDatabase';
 import { posService } from '../../domain/posService';
 import { Product, Order, OrderItem, PaymentMethod, PaymentItemDetail } from '../../domain/types';
-import { formatCents, calculateOrder } from '../../domain/calculations';
+import { formatCents, calculateOrder, getLocalDateString } from '../../domain/calculations';
 import { PaymentModal } from './PaymentModal';
 import { ItemNoteModal } from './ItemNoteModal';
+import { TransactionDetailModal } from './TransactionDetailModal';
+import { TodayTransactionsModal } from './TodayTransactionsModal';
 import {
   Star,
   Plus,
@@ -16,8 +18,10 @@ import {
   UserCheck,
   Coffee,
   Check,
+  CheckCircle,
   Clock,
   Heart,
+  Receipt,
 } from 'lucide-react';
 
 export const PosView: React.FC = () => {
@@ -41,6 +45,14 @@ export const PosView: React.FC = () => {
   // Modály
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [editingItemNote, setEditingItemNote] = useState<OrderItem | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [selectedPaymentIdForDetail, setSelectedPaymentIdForDetail] = useState<string | null>(null);
+
+  // Počet dnešních plateb
+  const todayStr = getLocalDateString(new Date().toISOString());
+  const todayPaymentsCount = allPayments.filter(
+    (p) => getLocalDateString(p.created_at) === todayStr && p.status !== 'cancelled'
+  ).length;
 
   // Neuzavřené objednávky S sebou
   const openTakeoutOrders = openOrders.filter((o) => !o.table_id);
@@ -340,6 +352,20 @@ export const PosView: React.FC = () => {
             </button>
           );
         })}
+
+        {/* Oddělovač */}
+        <div className="h-7 w-px bg-parchment-300 shrink-0 mx-1" />
+
+        {/* Tlačítko Historie plateb za dnešek */}
+        <button
+          type="button"
+          onClick={() => setIsHistoryOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold shrink-0 border border-parchment-300 bg-white text-ink-800 hover:bg-parchment-100 hover:border-tea-500 shadow-sm transition-all"
+          title="Zobrazit dnešní platby a transakce v detailu s možností úpravy"
+        >
+          <Receipt className="w-4 h-4 text-tea-700" />
+          <span>Platby dnes ({todayPaymentsCount})</span>
+        </button>
       </div>
 
       {/* 2. Hlavní plocha: Nabídka (Vlevo) + Účet (Vpravo) */}
@@ -618,18 +644,55 @@ export const PosView: React.FC = () => {
                 <span>Zaplatit vybrané položky / dýško</span>
               </button>
             ) : calc.totalCents > 0 ? (
-              <button
-                type="button"
-                onClick={handleOpenNewOrderAfterPaid}
-                className="w-full py-3 bg-tea-700 text-white rounded-xl font-bold text-sm shadow hover:bg-tea-800 transition-all flex items-center justify-center space-x-2"
-              >
-                <UserCheck className="w-4 h-4" />
-                <span>
-                  {selectedTableId
-                    ? 'Účet plně uhrazen • Založit nový pro stůl'
-                    : 'Účet plně uhrazen • Založit nový S sebou'}
-                </span>
-              </button>
+              <div className="space-y-2">
+                {currentPayments.length > 0 && (
+                  <div className="p-3 bg-tea-50/90 rounded-xl border border-tea-200 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between font-bold text-tea-900">
+                      <span className="flex items-center gap-1.5 text-tea-700">
+                        <CheckCircle className="w-4 h-4 text-tea-600" /> Účet uhrazen
+                      </span>
+                      <span className="font-mono text-ink-900">
+                        {formatCents(calc.paidCents + calc.totalTipsCents)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-ink-600">
+                      <span>
+                        Metoda:{' '}
+                        <strong>
+                          {currentPayments[currentPayments.length - 1].payment_method === 'card'
+                            ? 'Kartou'
+                            : 'Hotově'}
+                        </strong>
+                        {calc.totalTipsCents > 0 && ` (dýško ${formatCents(calc.totalTipsCents)})`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedPaymentIdForDetail(
+                            currentPayments[currentPayments.length - 1].id
+                          )
+                        }
+                        className="text-tea-700 font-bold hover:underline flex items-center gap-1"
+                      >
+                        <Receipt className="w-3.5 h-3.5" /> Upravit platbu
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleOpenNewOrderAfterPaid}
+                  className="w-full py-3 bg-tea-700 text-white rounded-xl font-bold text-sm shadow hover:bg-tea-800 transition-all flex items-center justify-center space-x-2"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  <span>
+                    {selectedTableId
+                      ? 'Účet plně uhrazen • Založit nový pro stůl'
+                      : 'Účet plně uhrazen • Založit nový S sebou'}
+                  </span>
+                </button>
+              </div>
             ) : null}
           </div>
         </div>
@@ -662,6 +725,22 @@ export const PosView: React.FC = () => {
           }}
         />
       )}
+
+      {/* Dnešní platby pokladny */}
+      <TodayTransactionsModal
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        onSelectPayment={(paymentId) => {
+          setSelectedPaymentIdForDetail(paymentId);
+        }}
+      />
+
+      {/* Detail a úprava transakce */}
+      <TransactionDetailModal
+        isOpen={Boolean(selectedPaymentIdForDetail)}
+        onClose={() => setSelectedPaymentIdForDetail(null)}
+        paymentId={selectedPaymentIdForDetail}
+      />
     </div>
   );
 };

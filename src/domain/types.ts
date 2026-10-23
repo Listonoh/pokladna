@@ -93,7 +93,7 @@ export interface Payment {
   cancelled_at?: string | null;
 }
 
-export type PaymentEventType = 'created' | 'cancelled';
+export type PaymentEventType = 'created' | 'cancelled' | 'updated';
 
 export interface PaymentEvent {
   id: string;

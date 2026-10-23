@@ -552,4 +552,77 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
     expect(cancelled?.status).toBe('cancelled');
     expect(cancelled?.note).toContain('Zákazník odešel');
   });
+
+  // 22. Úprava existující platby (např. oprava omylu: platba byla kartou a nikoliv hotově)
+  it('22. Úprava existující platby změní metodu z hotovosti na kartu a přepočítá denní report', async () => {
+    const today = getLocalDateString(new Date().toISOString());
+    const order = await posService.getOrCreateOrderForTable(null);
+    await posService.addItemToOrder(order.id, sampleProduct1, 1); // 95 Kč
+
+    // Původní platba byla zaznamenána jako 'cash' s dýškem 5 Kč (celkem 100 Kč)
+    const payment = await posService.recordPayment(order.id, 9500, 'cash', {
+      tipAmountCents: 500,
+    });
+    expect(payment.payment_method).toBe('cash');
+    expect(payment.tip_amount_cents).toBe(500);
+
+    // Před úpravou: ověříme denní report
+    const orderInDb = (await db.orders.get(order.id))!;
+    let report = generateDailyReport(
+      today,
+      [orderInDb],
+      await db.order_items.where({ order_id: order.id }).toArray(),
+      await db.payments.where({ order_id: order.id }).toArray(),
+      new Map(),
+      new Map()
+    );
+    expect(report.cashPaymentsCents).toBe(10000);
+    expect(report.cardPaymentsCents).toBe(0);
+
+    // Obsluha zjistila chybu: platba byla ve skutečnosti KARTOU a dýško bylo 10 Kč
+    const updated = await posService.updatePayment(payment.id, {
+      paymentMethod: 'card',
+      tipAmountCents: 1000,
+    });
+
+    expect(updated.payment_method).toBe('card');
+    expect(updated.tip_amount_cents).toBe(1000);
+
+    // Ověříme záznam v DB
+    const paymentInDb = (await db.payments.get(payment.id))!;
+    expect(paymentInDb.payment_method).toBe('card');
+    expect(paymentInDb.tip_amount_cents).toBe(1000);
+
+    // Audit událost 'updated'
+    const events = await db.payment_events.where({ payment_id: payment.id }).toArray();
+    const updateEvent = events.find((e) => e.event_type === 'updated');
+    expect(updateEvent).toBeDefined();
+    expect(updateEvent?.metadata?.previousMethod).toBe('cash');
+    expect(updateEvent?.metadata?.newMethod).toBe('card');
+
+    // Po úpravě: denní report okamžitě reflektuje přesun do platby kartou
+    report = generateDailyReport(
+      today,
+      [orderInDb],
+      await db.order_items.where({ order_id: order.id }).toArray(),
+      await db.payments.where({ order_id: order.id }).toArray(),
+      new Map(),
+      new Map()
+    );
+    expect(report.cashPaymentsCents).toBe(0);
+    expect(report.cardPaymentsCents).toBe(10500); // 95 Kč + 10 Kč dýško
+    expect(report.cardTipsCents).toBe(1000);
+  });
+
+  // 23. Úprava stornované platby vyhodí chybu
+  it('23. Nelze upravovat již stornovanou platbu', async () => {
+    const order = await posService.getOrCreateOrderForTable(null);
+    await posService.addItemToOrder(order.id, sampleProduct1, 1);
+    const payment = await posService.recordPayment(order.id, 9500, 'cash');
+    await posService.cancelPayment(payment.id, 'Chyba markování');
+
+    await expect(
+      posService.updatePayment(payment.id, { paymentMethod: 'card' })
+    ).rejects.toThrow('Nelze upravovat stornovanou platbu');
+  });
 });
