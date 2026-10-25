@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { PaymentMethod, OrderItem, PaymentItemDetail } from '../../domain/types';
-import { formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
+import { PaymentMethod, OrderItem, PaymentItemDetail, DiscountPercent } from '../../domain/types';
+import { calculateDiscountCents, formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
 import { Banknote, CreditCard, X, CheckCircle, AlertCircle, Heart, CheckSquare, Square } from 'lucide-react';
 
 interface PaymentModalProps {
@@ -15,7 +15,7 @@ interface PaymentModalProps {
   onConfirmPayment: (
     amountCents: number,
     method: PaymentMethod,
-    options: { tipAmountCents: number; paidItems: PaymentItemDetail[] }
+    options: { tipAmountCents: number; paidItems: PaymentItemDetail[]; discountPercent: DiscountPercent }
   ) => Promise<void>;
 }
 
@@ -30,8 +30,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   unpaidItems,
   onConfirmPayment,
 }) => {
-  if (!isOpen) return null;
-
   // Položky, které ještě zbývá uhradit
   const payableItems = unpaidItems.filter((i) => {
     const paidQty = i.paid_quantity || 0;
@@ -41,6 +39,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   // Mapa vybraných kusů k úhradě: itemId -> vybrané množství
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [discountPercent, setDiscountPercent] = useState<DiscountPercent>(0);
   const [totalEnteredCzk, setTotalEnteredCzk] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -57,9 +56,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     });
 
     setSelectedQuantities(initial);
+    setDiscountPercent(0);
     setTotalEnteredCzk(String(centsToCzk(initialTotalCents)));
     setErrorMessage(null);
   }, [isOpen]);
+
+  if (!isOpen) return null;
 
   // Spočítat cenu vybraných položek (normální cena)
   const selectedItemsCostCents = payableItems.reduce((sum, item) => {
@@ -67,12 +69,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     return sum + (qty * item.unit_price_cents_snapshot);
   }, 0);
 
+  const discountCents = calculateDiscountCents(selectedItemsCostCents, discountPercent);
+  const discountedItemsCostCents = selectedItemsCostCents - discountCents;
   const enteredTotalCents = czkToCents(Number(totalEnteredCzk) || 0);
-  const tipAmountCents = Math.max(0, enteredTotalCents - selectedItemsCostCents);
+  const tipAmountCents = Math.max(0, enteredTotalCents - discountedItemsCostCents);
 
   // Validace
   const isNoItemSelected = selectedItemsCostCents <= 0;
-  const isUnderpaid = enteredTotalCents < selectedItemsCostCents;
+  const isUnderpaid = enteredTotalCents < discountedItemsCostCents;
 
   const handleToggleSelectAll = (select: boolean) => {
     const updated: Record<string, number> = {};
@@ -87,7 +91,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     }
 
     setSelectedQuantities(updated);
-    setTotalEnteredCzk(String(centsToCzk(newCostCents)));
+    const newNetCents = newCostCents - calculateDiscountCents(newCostCents, discountPercent);
+    setTotalEnteredCzk(String(centsToCzk(newNetCents)));
     setErrorMessage(null);
   };
 
@@ -96,19 +101,28 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     const updated = { ...selectedQuantities, [itemId]: clampedQty };
     setSelectedQuantities(updated);
 
-    // Přepočítat cenu položek
+    // Přepočítat cenu položek po slevě a zachovat případné dýško.
     const newCostCents = payableItems.reduce((sum, item) => {
       const q = updated[item.id] || 0;
       return sum + (q * item.unit_price_cents_snapshot);
     }, 0);
 
-    // Pokud uživatel neměl zadané dýško, automaticky srovnáme zadanou částku
-    setTotalEnteredCzk(String(centsToCzk(newCostCents)));
+    const currentTipCents = Math.max(0, enteredTotalCents - discountedItemsCostCents);
+    const newNetCents = newCostCents - calculateDiscountCents(newCostCents, discountPercent);
+    setTotalEnteredCzk(String(centsToCzk(newNetCents + currentTipCents)));
+    setErrorMessage(null);
+  };
+
+  const handleDiscountChange = (nextDiscount: DiscountPercent) => {
+    const currentTipCents = Math.max(0, enteredTotalCents - discountedItemsCostCents);
+    const nextDiscountCents = calculateDiscountCents(selectedItemsCostCents, nextDiscount);
+    setDiscountPercent(nextDiscount);
+    setTotalEnteredCzk(String(centsToCzk(selectedItemsCostCents - nextDiscountCents + currentTipCents)));
     setErrorMessage(null);
   };
 
   const handleApplyTipPreset = (additionalCzk: number) => {
-    const baseCzk = centsToCzk(selectedItemsCostCents);
+    const baseCzk = centsToCzk(discountedItemsCostCents);
     const currentCzk = Number(totalEnteredCzk) || baseCzk;
 
     setTotalEnteredCzk(String(currentCzk + additionalCzk));
@@ -116,7 +130,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   };
 
   const handleRoundTo = (step: number) => {
-    const baseCzk = centsToCzk(selectedItemsCostCents);
+    const baseCzk = centsToCzk(discountedItemsCostCents);
     const rounded = Math.ceil(baseCzk / step) * step;
     const finalAmount = rounded === baseCzk ? baseCzk + step : rounded;
     setTotalEnteredCzk(String(finalAmount));
@@ -129,7 +143,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       return;
     }
     if (isUnderpaid) {
-      setErrorMessage(`Zadaná částka (${formatCents(enteredTotalCents)}) nepokrývá cenu vybraných položek (${formatCents(selectedItemsCostCents)}).`);
+      setErrorMessage(`Zadaná částka (${formatCents(enteredTotalCents)}) nepokrývá cenu vybraných položek po slevě (${formatCents(discountedItemsCostCents)}).`);
       return;
     }
 
@@ -152,9 +166,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       setIsSubmitting(true);
       setErrorMessage(null);
 
-      await onConfirmPayment(selectedItemsCostCents, paymentMethod, {
+      await onConfirmPayment(discountedItemsCostCents, paymentMethod, {
         tipAmountCents,
         paidItems,
+        discountPercent,
       });
 
       onClose();
@@ -283,6 +298,22 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
           {/* 2. ZADÁNÍ ZAPLACENÉ ČÁSTKY A SPROPITNÉHO */}
           <div className="bg-white rounded-xl border border-parchment-300 p-3.5 shadow-sm space-y-3">
+            <div>
+              <label htmlFor="paymentDiscount" className="text-xs font-bold uppercase tracking-wider text-ink-700 block mb-1.5">
+                Sleva na vybrané položky
+              </label>
+              <select
+                id="paymentDiscount"
+                value={discountPercent}
+                onChange={(e) => handleDiscountChange(Number(e.target.value) as DiscountPercent)}
+                className="w-full rounded-lg border border-parchment-300 bg-white px-3 py-2 text-sm font-semibold text-ink-800"
+              >
+                <option value={0}>Bez slevy (0 %)</option>
+                <option value={25}>Sleva 25 %</option>
+                <option value={75}>Sleva 75 %</option>
+              </select>
+            </div>
+
             <label htmlFor="totalAmountInput" className="text-xs font-bold uppercase tracking-wider text-ink-700 block">
               2. Zaplacená částka vč. dýška (Kč)
             </label>
@@ -291,8 +322,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               <input
                 id="totalAmountInput"
                 type="number"
-                step="1"
-                min={centsToCzk(selectedItemsCostCents)}
+                step="0.01"
+                min={centsToCzk(discountedItemsCostCents)}
                 value={totalEnteredCzk}
                 onChange={(e) => {
                   setTotalEnteredCzk(e.target.value);
@@ -316,7 +347,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setTotalEnteredCzk(String(centsToCzk(selectedItemsCostCents)));
+                setTotalEnteredCzk(String(centsToCzk(discountedItemsCostCents)));
                   setErrorMessage(null);
                 }}
                 className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-parchment-300 bg-parchment-50 hover:bg-parchment-200 text-ink-700"
@@ -370,9 +401,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             {/* Rozpad do databáze */}
             <div className="grid grid-cols-2 gap-2 bg-parchment-100 p-3 rounded-xl border border-parchment-300/80 text-xs">
               <div>
-                <span className="text-ink-500 block">Zboží (tržba pokladny):</span>
+                <span className="text-ink-500 block">Zboží po slevě:</span>
                 <span className="text-sm font-bold text-ink-900">
-                  {formatCents(selectedItemsCostCents)}
+                  {formatCents(discountedItemsCostCents)}
                 </span>
               </div>
               <div className="text-right">
@@ -381,6 +412,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                   +{formatCents(tipAmountCents)}
                 </span>
               </div>
+              {discountCents > 0 && (
+                <div className="col-span-2 flex justify-between border-t border-parchment-200 pt-2">
+                  <span className="text-ink-500">Sleva {discountPercent} % z {formatCents(selectedItemsCostCents)}:</span>
+                  <span className="font-bold text-tea-800">−{formatCents(discountCents)}</span>
+                </div>
+              )}
             </div>
           </div>
 

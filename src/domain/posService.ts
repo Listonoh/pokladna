@@ -9,8 +9,9 @@ import {
   Product,
   PaymentMethod,
   PaymentItemDetail,
+  DiscountPercent,
 } from './types';
-import { calculateOrder, validatePaymentAmount } from './calculations';
+import { calculateDiscountCents, calculateOrder, validatePaymentAmount } from './calculations';
 
 /**
  * Generuje unikátní UUID v4 (kompatibilní v prohlížeči i Node).
@@ -39,6 +40,7 @@ export interface RecordPaymentOptions {
   tipAmountCents?: number;
   customIdempotencyId?: string;
   paidItems?: PaymentItemDetail[];
+  discountPercent?: DiscountPercent;
 }
 
 export class PosService {
@@ -327,6 +329,10 @@ export class PosService {
     }
 
     const tipAmountCents = options.tipAmountCents || 0;
+    const discountPercent = options.discountPercent || 0;
+    const grossAmountCents = options.paidItems?.reduce((sum, item) => sum + item.total_cents, 0)
+      ?? amountCents;
+    const discountCents = calculateDiscountCents(grossAmountCents, discountPercent);
     const paymentId = options.customIdempotencyId || generateUUID();
 
     // 1. Idempotence: pokud platba již existuje, vrátíme ji
@@ -348,9 +354,16 @@ export class PosService {
     const payments = await db.payments.where({ order_id: orderId }).toArray();
 
     const calc = calculateOrder(items, payments);
-    const validation = validatePaymentAmount(calc.remainingCents, amountCents, tipAmountCents);
+    const validation = validatePaymentAmount(
+      calc.remainingCents,
+      amountCents + discountCents,
+      tipAmountCents
+    );
     if (!validation.valid) {
       throw new Error(validation.error);
+    }
+    if (amountCents !== grossAmountCents - discountCents) {
+      throw new Error('Částka platby neodpovídá ceně položek po slevě.');
     }
 
     const now = new Date().toISOString();
@@ -393,6 +406,8 @@ export class PosService {
       id: paymentId,
       order_id: orderId,
       amount_cents: amountCents,
+      discount_percent: discountPercent,
+      discount_cents: discountCents,
       tip_amount_cents: tipAmountCents,
       payment_method: paymentMethod,
       status: 'completed',
@@ -411,6 +426,8 @@ export class PosService {
       event_type: 'created',
       metadata: {
         amountCents,
+        discountPercent,
+        discountCents,
         tipAmountCents,
         totalPaidCents: amountCents + tipAmountCents,
         method: paymentMethod,
@@ -421,7 +438,7 @@ export class PosService {
     await db.payment_events.add(event);
 
     // Aktualizace objednávky, pokud je plně zaplacena
-    const newPaidCents = calc.paidCents + amountCents;
+    const newPaidCents = calc.paidCents + amountCents + discountCents;
     if (newPaidCents >= calc.totalCents && calc.totalCents > 0) {
       await db.orders.update(orderId, {
         status: 'paid',

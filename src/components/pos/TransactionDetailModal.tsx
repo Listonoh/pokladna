@@ -107,6 +107,7 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
           quantity: oi.quantity,
           total_cents: oi.quantity * oi.unit_price_cents_snapshot,
         }));
+  const grossItemsCents = itemsToDisplay.reduce((sum, item) => sum + item.total_cents, 0);
 
   // Změna formuláře
   const currentTipCents = czkToCents(Math.max(0, Number(editedTipCzk) || 0));
@@ -248,10 +249,22 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
             </div>
 
             {/* Součet položek */}
+            {(payment.discount_cents || 0) > 0 && (
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-ink-500">Zboží před slevou:</span>
+                <span className="font-semibold">{formatCents(grossItemsCents)}</span>
+              </div>
+            )}
             <div className="bg-parchment-100 p-2.5 rounded-lg flex justify-between items-center text-xs font-bold text-ink-800">
-              <span>Zboží celkem:</span>
+              <span>Zboží po slevě:</span>
               <span className="text-sm text-tea-800">{formatCents(payment.amount_cents)}</span>
             </div>
+            {(payment.discount_cents || 0) > 0 && (
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-ink-500">Sleva ({payment.discount_percent || 0}%):</span>
+                <span className="font-semibold text-tea-800">−{formatCents(payment.discount_cents || 0)}</span>
+              </div>
+            )}
           </div>
 
           {/* 2. ÚPRAVA PLATEBNÍ METODY A DÝŠKA (POKUD NENÍ STORNOVÁNO) */}
@@ -390,6 +403,12 @@ export const TransactionDetailModal: React.FC<TransactionDetailModalProps> = ({
                 <span className="text-ink-500">Spropitné:</span>
                 <span className="font-semibold">{formatCents(payment.tip_amount_cents || 0)}</span>
               </div>
+              {(payment.discount_cents || 0) > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-ink-500">Sleva ({payment.discount_percent || 0}%):</span>
+                  <span className="font-semibold">−{formatCents(payment.discount_cents || 0)}</span>
+                </div>
+              )}
               <div className="flex justify-between border-t border-parchment-200 pt-2 font-bold text-sm">
                 <span>Celková částka:</span>
                 <span>{formatCents(payment.amount_cents + (payment.tip_amount_cents || 0))}</span>

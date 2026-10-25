@@ -1,4 +1,4 @@
-import { OrderItem, Payment, OrderCalculation, Order } from './types';
+import { OrderItem, Payment, OrderCalculation, Order, DiscountPercent } from './types';
 
 /**
  * Převede částku v korunách na celočíselné haléře (např. 85.50 -> 8550).
@@ -12,6 +12,10 @@ export function czkToCents(czk: number): number {
  */
 export function centsToCzk(cents: number): number {
   return cents / 100;
+}
+
+export function calculateDiscountCents(amountCents: number, discountPercent: DiscountPercent): number {
+  return Math.round((amountCents * discountPercent) / 100);
 }
 
 /**
@@ -60,7 +64,10 @@ export function calculateOrder(items: OrderItem[], payments: Payment[]): OrderCa
     .reduce((acc, p) => acc + (p.tip_amount_cents || 0), 0);
 
   const totalTipsCents = totalCashTipsCents + totalCardTipsCents;
-  const paidCents = totalCashCents + totalCardCents;
+  const paidCents = activePayments.reduce(
+    (sum, payment) => sum + payment.amount_cents + (payment.discount_cents || 0),
+    0
+  );
   const remainingCents = Math.max(0, totalCents - paidCents);
 
   const totalReceivedCashCents = totalCashCents + totalCashTipsCents;

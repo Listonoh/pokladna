@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db/posDatabase';
 import { posService } from '../../domain/posService';
-import { Product, Order, OrderItem, PaymentMethod, PaymentItemDetail } from '../../domain/types';
+import { Product, Order, OrderItem, PaymentMethod, PaymentItemDetail, DiscountPercent } from '../../domain/types';
 import { formatCents, calculateOrder, getLocalDateString } from '../../domain/calculations';
 import { PaymentModal } from './PaymentModal';
 import { ItemNoteModal } from './ItemNoteModal';
@@ -118,7 +118,7 @@ export const PosView: React.FC = () => {
   const handleConfirmPayment = async (
     amountCents: number,
     method: PaymentMethod,
-    options: { tipAmountCents: number; paidItems: PaymentItemDetail[] }
+    options: { tipAmountCents: number; paidItems: PaymentItemDetail[]; discountPercent: DiscountPercent }
   ) => {
     if (!currentOrder) return;
     await posService.recordPayment(currentOrder.id, amountCents, method, options);

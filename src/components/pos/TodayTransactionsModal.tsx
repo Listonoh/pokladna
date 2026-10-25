@@ -251,6 +251,11 @@ export const TodayTransactionsModal: React.FC<TodayTransactionsModalProps> = ({
                           dýško +{formatCents(p.tip_amount_cents)}
                         </span>
                       )}
+                      {(p.discount_cents || 0) > 0 && (
+                        <span className="text-[10px] text-tea-700 font-semibold block">
+                          sleva {p.discount_percent || 0}% −{formatCents(p.discount_cents || 0)}
+                        </span>
+                      )}
                     </div>
 
                     <div className="p-1.5 rounded-lg bg-parchment-100 text-ink-600 hover:bg-parchment-200 transition-colors">

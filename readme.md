@@ -86,13 +86,14 @@ Systém se skládá ze 4 hlavních částí přístupných z horní lišty:
 V případě nasazení se Supabase backendem:
 
 1. Založte nový projekt na [supabase.com](https://supabase.com).
-2. V sekci **SQL Editor** spusťte migrační skript:
-   [`supabase/migrations/20261014_init_pos.sql`](file:///C:/Users/leest/source/pokladna/supabase/migrations/20261014_init_pos.sql)
+2. V sekci **SQL Editor** spusťte při zakládání prázdné databáze aktuální schéma:
+   [`supabase/migrations/20261015_schema_text_ids_and_seed.sql`](supabase/migrations/20261015_schema_text_ids_and_seed.sql)
    Skript vytvoří:
    - Normalizované tabulky: `categories`, `products`, `tables`, `orders`, `order_items`, `order_item_events`, `payments`, `payment_events`.
    - Databázové indexy pro bleskové dotazy.
    - Bezpečnostní **Row Level Security (RLS)** politiky.
    - Transakční PostgreSQL procedury `process_payment` a `cancel_payment`.
+   Poté spusťte [`supabase/migrations/20261025_payment_discounts.sql`](supabase/migrations/20261025_payment_discounts.sql). U již nastavené databáze s textovými ID stačí spustit tento navazující skript.
 3. Do souboru `.env` zadejte získanou URL a anonymní veřejný klíč:
    ```env
    VITE_SUPABASE_URL=https://vas-projekt.supabase.co
@@ -116,9 +117,9 @@ V případě nasazení se Supabase backendem:
 
 ---
 
-## 6. Automatizované testy (19/19 splněno)
+## 6. Automatizované testy
 
-Spuštěním `npm test` se ověřuje všech 19 povinných scénářů definovaných v zadání:
+Spuštěním `npm test` se ověřují následující kritické scénáře:
 
 1. Přidání produktu k novému účtu se snapshotem ceny a názvu.
 2. Opakované přidání stejného produktu (zvýšení množství bez duplikace řádku).
@@ -139,6 +140,7 @@ Spuštěním `npm test` se ověřuje všech 19 povinných scénářů definovan�
 17. Zařazení mutací do Outbox fronty.
 18. Opakování synchronizace bez duplicit.
 19. Export dat a ověření matematické konzistence součtů.
+20. Uplatnění slevy 25 % a 75 %, uzavření účtu a obnovení dluhu po stornu.
 
 ---
 

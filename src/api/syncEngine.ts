@@ -225,6 +225,8 @@ export class SyncEngine {
               p_payment_id: item.id,
               p_order_id: p.order_id,
               p_amount_cents: p.amount_cents,
+              p_discount_cents: p.discount_cents || 0,
+              p_discount_percent: p.discount_percent || 0,
               p_tip_amount_cents: p.tip_amount_cents || 0,
               p_payment_method: p.payment_method,
               p_paid_items: p.paid_items || [],

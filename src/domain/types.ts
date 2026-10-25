@@ -1,4 +1,5 @@
 export type PaymentMethod = 'cash' | 'card';
+export type DiscountPercent = 0 | 25 | 75;
 export type PaymentStatus = 'completed' | 'cancelled';
 export type OrderStatus = 'open' | 'paid' | 'cancelled';
 export type DeliveryStatus = 'pending' | 'delivered' | 'cancelled';
@@ -84,6 +85,8 @@ export interface Payment {
   id: string; // Idempotentní UUID v4 generované klientem
   order_id: string;
   amount_cents: number; // Cena zaplacených položek bez spropitného
+  discount_percent?: DiscountPercent;
+  discount_cents?: number;
   tip_amount_cents: number; // Spropitné / dýško
   payment_method: PaymentMethod;
   status: PaymentStatus;

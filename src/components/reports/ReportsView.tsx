@@ -120,7 +120,7 @@ export const ReportsView: React.FC = () => {
     csv += `\n`;
 
     csv += `Detailní rozpis jednotlivých plateb a transakcí\n`;
-    csv += `Čas;Účet;Stůl;Způsob;Zboží (Kč);Spropitné (Kč);Celkem (Kč);Stav;Položky\n`;
+    csv += `Čas;Účet;Stůl;Způsob;Zboží po slevě (Kč);Sleva (%);Sleva (Kč);Spropitné (Kč);Celkem (Kč);Stav;Položky\n`;
     dayPayments.forEach((p) => {
       const order = ordersMap.get(p.order_id);
       const tableName = order?.table_id ? tablesMap.get(order.table_id) || 'Stůl' : 'S sebou';
@@ -130,7 +130,7 @@ export const ReportsView: React.FC = () => {
       const status = p.status === 'cancelled' ? 'Stornováno' : 'Dokončeno';
       const itemsStr = (p.paid_items || []).map((i) => `${i.quantity}x ${i.product_name}`).join(', ');
 
-      csv += `${time};${orderNum};${tableName};${method};${p.amount_cents / 100};${(p.tip_amount_cents || 0) / 100};${(p.amount_cents + (p.tip_amount_cents || 0)) / 100};${status};"${itemsStr}"\n`;
+      csv += `${time};${orderNum};${tableName};${method};${p.amount_cents / 100};${p.discount_percent || 0};${(p.discount_cents || 0) / 100};${(p.tip_amount_cents || 0) / 100};${(p.amount_cents + (p.tip_amount_cents || 0)) / 100};${status};"${itemsStr}"\n`;
     });
 
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -405,7 +405,8 @@ export const ReportsView: React.FC = () => {
                   <th className="py-3 px-3">Stůl / Typ</th>
                   <th className="py-3 px-3">Způsob platby</th>
                   <th className="py-3 px-4">Položky</th>
-                  <th className="py-3 px-3 text-right">Zboží</th>
+                  <th className="py-3 px-3 text-right">Zboží po slevě</th>
+                  <th className="py-3 px-3 text-right">Sleva</th>
                   <th className="py-3 px-3 text-right">Spropitné</th>
                   <th className="py-3 px-3 text-right">Celkem</th>
                   <th className="py-3 px-3 text-center">Stav</th>
@@ -481,6 +482,16 @@ export const ReportsView: React.FC = () => {
 
                       <td className="py-3 px-3 text-right font-medium text-ink-700 whitespace-nowrap">
                         {formatCents(p.amount_cents)}
+                      </td>
+
+                      <td className="py-3 px-3 text-right whitespace-nowrap">
+                        {(p.discount_cents || 0) > 0 ? (
+                          <span className="font-semibold text-tea-800">
+                            −{formatCents(p.discount_cents || 0)} ({p.discount_percent || 0}%)
+                          </span>
+                        ) : (
+                          <span className="text-ink-400">—</span>
+                        )}
                       </td>
 
                       <td className="py-3 px-3 text-right whitespace-nowrap font-medium">

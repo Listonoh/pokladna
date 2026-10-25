@@ -10,7 +10,7 @@ import {
 } from '../domain/calculations';
 import { syncEngine } from '../api/syncEngine';
 
-describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () => {
+describe('Pokladní systém - obchodní logika', () => {
   let sampleProduct1: Product;
   let sampleProduct2: Product;
 
@@ -106,6 +106,48 @@ describe('Pokladní systém - 19 kritických scénářů obchodní logiky', () =
 
     const updatedOrder = await db.orders.get(order.id);
     expect(updatedOrder?.status).toBe('paid');
+  });
+
+  it('uplatní slevu 25 % nebo 75 % na vybrané položky a správně uzavře účet', async () => {
+    for (const discountPercent of [25, 75] as const) {
+      const order = await posService.createNewTakeoutOrder();
+      const item = await posService.addItemToOrder(order.id, sampleProduct1, 1);
+      const discountCents = Math.round((item.unit_price_cents_snapshot * discountPercent) / 100);
+      const payment = await posService.recordPayment(
+        order.id,
+        item.unit_price_cents_snapshot - discountCents,
+        'cash',
+        {
+          discountPercent,
+          paidItems: [{
+            order_item_id: item.id,
+            product_name: item.product_name_snapshot,
+            unit_price_cents: item.unit_price_cents_snapshot,
+            quantity: 1,
+            total_cents: item.unit_price_cents_snapshot,
+          }],
+        }
+      );
+
+      expect(payment.discount_percent).toBe(discountPercent);
+      expect(payment.discount_cents).toBe(discountCents);
+
+      const items = await db.order_items.where({ order_id: order.id }).toArray();
+      const payments = await db.payments.where({ order_id: order.id }).toArray();
+      const calc = calculateOrder(items, payments);
+      expect(calc.paidCents).toBe(item.unit_price_cents_snapshot);
+      expect(calc.remainingCents).toBe(0);
+      expect(calc.totalCashCents).toBe(item.unit_price_cents_snapshot - discountCents);
+      expect((await db.orders.get(order.id))?.status).toBe('paid');
+
+      await posService.cancelPayment(payment.id, 'Test storna slevy');
+      const cancelledCalc = calculateOrder(
+        await db.order_items.where({ order_id: order.id }).toArray(),
+        await db.payments.where({ order_id: order.id }).toArray()
+      );
+      expect(cancelledCalc.remainingCents).toBe(item.unit_price_cents_snapshot);
+      expect((await db.orders.get(order.id))?.status).toBe('open');
+    }
   });
 
   // 5. Plná platba kartou
