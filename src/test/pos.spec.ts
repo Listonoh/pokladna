@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { db, seedInitialDataIfEmpty } from '../db/posDatabase';
+import { db, replaceLocalDataFromCloud, seedInitialDataIfEmpty } from '../db/posDatabase';
 import { posService } from '../domain/posService';
 import { Product } from '../domain/types';
 import {
@@ -30,6 +30,105 @@ describe('Pokladní systém - obchodní logika', () => {
 
     sampleProduct1 = (await db.products.get('prod-sencha'))!;
     sampleProduct2 = (await db.products.get('prod-mochi'))!;
+  });
+
+  it('replaces the local cache with cloud catalog and transaction history', async () => {
+    const now = new Date().toISOString();
+    const oldOrder = await posService.getOrCreateOrderForTable(null);
+    await db.sync_outbox.clear();
+
+    const replaced = await replaceLocalDataFromCloud({
+      categories: [{
+        id: 'cloud-category',
+        name: 'Cloud category',
+        sort_order: 1,
+        is_active: true,
+        created_at: now,
+        updated_at: now,
+      }],
+      products: [{
+        id: 'cloud-product',
+        category_id: 'cloud-category',
+        name: 'Cloud product',
+        price_cents: 1234,
+        is_favorite: false,
+        sort_order: 1,
+        is_active: true,
+        created_at: now,
+        updated_at: now,
+      }],
+      tables: [],
+      orders: [{
+        id: 'cloud-order',
+        table_id: null,
+        order_number: '20261027-001',
+        status: 'paid',
+        created_at: now,
+        closed_at: now,
+      }],
+      order_items: [{
+        id: 'cloud-order-item',
+        order_id: 'cloud-order',
+        product_id: 'cloud-product',
+        product_name_snapshot: 'Cloud product',
+        unit_price_cents_snapshot: 1234,
+        quantity: 1,
+        paid_quantity: 1,
+        delivery_status: 'delivered',
+        created_at: now,
+        updated_at: now,
+      }],
+      order_item_events: [],
+      payments: [{
+        id: 'cloud-payment',
+        order_id: 'cloud-order',
+        amount_cents: 1234,
+        tip_amount_cents: 0,
+        payment_method: 'cash',
+        status: 'completed',
+        created_at: now,
+      }],
+      payment_events: [],
+    });
+
+    expect(replaced).toBe(true);
+    expect(await db.categories.toArray()).toHaveLength(1);
+    expect(await db.categories.get('cloud-category')).toBeDefined();
+    expect(await db.products.toArray()).toHaveLength(1);
+    expect(await db.products.get('cloud-product')).toBeDefined();
+    expect(await db.orders.toArray()).toEqual([expect.objectContaining({ id: 'cloud-order' })]);
+    expect(await db.order_items.get('cloud-order-item')).toBeDefined();
+    expect(await db.payments.get('cloud-payment')).toBeDefined();
+    expect(await db.orders.get(oldOrder.id)).toBeUndefined();
+  });
+
+  it('does not replace local data while unsynced changes are queued', async () => {
+    await syncEngine.queueMutation('orders', 'insert', { id: 'pending-order' }, 'pending-order');
+
+    const replaced = await replaceLocalDataFromCloud({
+      categories: [],
+      products: [],
+      tables: [],
+      orders: [],
+      order_items: [],
+      order_item_events: [],
+      payments: [],
+      payment_events: [],
+    });
+
+    expect(replaced).toBe(false);
+    expect(await db.categories.get('cat-teas')).toBeDefined();
+  });
+
+  it('keeps cancelled order items and their audit event for synchronization', async () => {
+    const order = await posService.getOrCreateOrderForTable(null);
+    const item = await posService.addItemToOrder(order.id, sampleProduct1);
+
+    await posService.removeItem(item.id);
+
+    expect((await db.order_items.get(item.id))?.delivery_status).toBe('cancelled');
+    expect(await db.order_item_events.where({ order_item_id: item.id, event_type: 'cancelled' }).count()).toBe(1);
+    expect(await db.sync_outbox.where('entity').equals('order_item_events').count()).toBe(2);
   });
 
   // 1. Přidání produktu k novému účtu

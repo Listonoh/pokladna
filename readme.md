@@ -104,6 +104,8 @@ V případě nasazení se Supabase backendem:
 
 V prohlížeči používejte pouze veřejný publishable/anon klíč, nikdy `service_role` secret key. Zabezpečení databáze zajišťují RLS politiky omezené na `authenticated`.
 
+Po přihlášení aplikace synchronizuje lokální katalog i transakční historii se Supabase. Tlačítko **Synchronizovat** v horní liště stáhne nejnovější data; po úspěšném odeslání čekajících offline změn nahradí lokální katalog, objednávky, položky a platby kompletní kopií serverových dat. Pokud čekají neodeslané změny nebo dojde k chybě zápisu, lokální data se nepřepíší. Synchronizace historie stránkuje výsledky po 1 000 záznamech.
+
 ---
 
 ## 5. Zálohování a obnova dat

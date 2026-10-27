@@ -18,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
     pendingCount: syncEngine.pendingCount,
     lastError: syncEngine.lastError,
     isProcessing: syncEngine.isProcessing,
+    isAuthenticated: syncEngine.isAuthenticated,
   });
   const [showErrorModal, setShowErrorModal] = useState(false);
 
@@ -32,14 +33,19 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
   }, []) ?? 0;
 
   useEffect(() => {
-    const unsubscribe = syncEngine.subscribe(() => {
+    const updateSyncState = () => {
       setSyncState({
         isOnline: syncEngine.isOnline,
         pendingCount: syncEngine.pendingCount,
         lastError: syncEngine.lastError,
         isProcessing: syncEngine.isProcessing,
+        isAuthenticated: syncEngine.isAuthenticated,
       });
+    };
+    const unsubscribe = syncEngine.subscribe(() => {
+      updateSyncState();
     });
+    updateSyncState();
 
     const updateTime = () => {
       const now = new Date();
@@ -156,25 +162,26 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
           </div>
         )}
 
-        {syncState.pendingCount > 0 && (
+        {syncState.isAuthenticated && (
           <button
             type="button"
             onClick={() => {
               if (syncState.lastError) {
                 setShowErrorModal(true);
               } else {
-                syncEngine.triggerSync();
+                void syncEngine.triggerSync();
               }
             }}
+            disabled={syncState.isProcessing || (!syncState.isOnline && !syncState.lastError)}
             title={
               syncState.lastError
                 ? `Chyba synchronizace: ${syncState.lastError}. Klikněte pro zobrazení detailu.`
-                : 'Kliknutím spustíte synchronizaci'
+                : 'Stáhnout aktuální data ze Supabase a synchronizovat místní změny'
             }
             className={`flex items-center space-x-1.5 text-xs px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
               syncState.lastError
                 ? 'bg-rose-700/90 hover:bg-rose-600 text-white border border-rose-500/60 shadow-sm'
-                : 'bg-tea-600 hover:bg-tea-500 text-parchment-50'
+                : 'bg-tea-600 hover:bg-tea-500 text-parchment-50 disabled:opacity-60 disabled:cursor-not-allowed'
             }`}
           >
             {syncState.lastError ? (
@@ -184,8 +191,12 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
             )}
             <span>
               {syncState.lastError
-                ? `Chyba syncu (${syncState.pendingCount})`
-                : `Fronta: ${syncState.pendingCount}`}
+                ? `Chyba syncu${syncState.pendingCount ? ` (${syncState.pendingCount})` : ''}`
+                : syncState.isProcessing
+                  ? 'Synchronizuji…'
+                  : syncState.pendingCount
+                    ? `Sync (${syncState.pendingCount})`
+                    : 'Synchronizovat'}
             </span>
           </button>
         )}

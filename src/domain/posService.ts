@@ -147,6 +147,7 @@ export class PosService {
 
       const updatedItem = (await db.order_items.get(existing.id))!;
       await syncEngine.queueMutation('order_items', 'update', { ...updatedItem }, updatedItem.id);
+      await syncEngine.queueMutation('order_item_events', 'insert', { ...event }, event.id);
       return updatedItem;
     }
 
@@ -178,6 +179,7 @@ export class PosService {
     await db.order_item_events.add(event);
 
     await syncEngine.queueMutation('order_items', 'insert', { ...newItem }, newItem.id);
+    await syncEngine.queueMutation('order_item_events', 'insert', { ...event }, event.id);
     return newItem;
   }
 
@@ -210,6 +212,7 @@ export class PosService {
 
     const updated = (await db.order_items.get(orderItemId))!;
     await syncEngine.queueMutation('order_items', 'update', { ...updated }, orderItemId);
+    await syncEngine.queueMutation('order_item_events', 'insert', { ...event }, event.id);
   }
 
   /**
@@ -242,8 +245,14 @@ export class PosService {
     };
     await db.order_item_events.add(event);
 
-    await db.order_items.delete(orderItemId);
-    await syncEngine.queueMutation('order_items', 'delete', { id: orderItemId }, orderItemId);
+    await db.order_items.update(orderItemId, {
+      delivery_status: 'cancelled',
+      delivered_at: null,
+      updated_at: now,
+    });
+    const updated = (await db.order_items.get(orderItemId))!;
+    await syncEngine.queueMutation('order_items', 'update', { ...updated }, orderItemId);
+    await syncEngine.queueMutation('order_item_events', 'insert', { ...event }, event.id);
   }
 
   /**
@@ -270,6 +279,7 @@ export class PosService {
 
     const updated = (await db.order_items.get(orderItemId))!;
     await syncEngine.queueMutation('order_items', 'update', { ...updated }, orderItemId);
+    await syncEngine.queueMutation('order_item_events', 'insert', { ...event }, event.id);
   }
 
   /**
@@ -309,6 +319,7 @@ export class PosService {
 
     const updated = (await db.order_items.get(orderItemId))!;
     await syncEngine.queueMutation('order_items', 'update', { ...updated }, orderItemId);
+    await syncEngine.queueMutation('order_item_events', 'insert', { ...event }, event.id);
   }
 
   /**
@@ -497,6 +508,7 @@ export class PosService {
 
     const updatedPayment = (await db.payments.get(paymentId))!;
     await syncEngine.queueMutation('payments', 'update', { ...updatedPayment }, paymentId);
+    await syncEngine.queueMutation('payment_events', 'insert', { ...event }, event.id);
     return updatedPayment;
   }
 

@@ -1,6 +1,16 @@
-import { db } from '../db/posDatabase';
+import { CloudSnapshot, db, replaceLocalDataFromCloud } from '../db/posDatabase';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { SyncOutboxItem } from '../domain/types';
+import {
+  Category,
+  Order,
+  OrderItem,
+  OrderItemEvent,
+  Payment,
+  PaymentEvent,
+  Product,
+  SyncOutboxItem,
+  Table,
+} from '../domain/types';
 
 /**
  * Převede libovolnou chybu z PostgREST / Supabase / sítě na srozumitelnou zprávu.
@@ -22,7 +32,7 @@ export function formatSyncError(err: unknown, entity?: string, action?: string):
     // PostgreSQL 42501 - Row Level Security policy violation
     if (code === '42501' || message.includes('row-level security') || message.includes('violates row-level security policy')) {
       const targetTable = entity ? `do tabulky "${entity}"` : 'do databáze';
-      return `Chyba oprávnění (RLS 42501) při zápisu ${targetTable}: Supabase zamítl požadavek, protože RLS politika nepovoluje zápis pro roli 'anon' (veřejný klíč). V SQL Editoru na Supabase upravte politiky např.: ALTER POLICY "..." ON public.${entity || 'tabulka'} TO anon, authenticated; (Detail: ${message})`;
+      return `Chyba oprávnění (RLS 42501) při zápisu ${targetTable}: Supabase zamítl požadavek. Ověřte přihlášení a RLS politiky pro roli 'authenticated' (Detail: ${message})`;
     }
 
     // PostgreSQL 22P02 - Neplatná syntaxe typu (např. UUID vs textové ID "tbl-4")
@@ -77,13 +87,13 @@ export function formatSyncError(err: unknown, entity?: string, action?: string):
 
 export class SyncEngine {
   public isProcessing = false;
-  public isAuthenticated = false;
   private listeners: Array<() => void> = [];
 
   public isOnline: boolean = typeof navigator !== 'undefined' ? navigator.onLine : true;
   public pendingCount = 0;
   public lastSyncTime: Date | null = null;
   public lastError: string | null = null;
+  public isAuthenticated = false;
 
   constructor() {
     if (supabase) {
@@ -171,8 +181,6 @@ export class SyncEngine {
       if (failedItems.length > 0 && failedItems[0].error_message) {
         this.lastError = failedItems[0].error_message;
       }
-    } else if (this.pendingCount === 0) {
-      this.lastError = null;
     }
 
     this.notify();
@@ -216,7 +224,19 @@ export class SyncEngine {
       return;
     }
 
-    if (!this.isAuthenticated) return;
+    try {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      this.isAuthenticated = Boolean(session);
+      if (!session) {
+        this.notify();
+        return;
+      }
+    } catch (sessionError: unknown) {
+      this.lastError = formatSyncError(sessionError);
+      this.notify();
+      return;
+    }
 
     this.isProcessing = true;
     this.notify();
@@ -228,13 +248,47 @@ export class SyncEngine {
         .where('status')
         .anyOf(['pending', 'failed'])
         .sortBy('created_at');
+      const entityOrder: Record<SyncOutboxItem['entity'], number> = {
+        categories: 0,
+        products: 1,
+        tables: 2,
+        orders: 3,
+        order_items: 4,
+        payments: 5,
+        order_item_events: 6,
+        payment_events: 7,
+      };
+      itemsToSync.sort((a, b) =>
+        a.created_at.localeCompare(b.created_at) || entityOrder[a.entity] - entityOrder[b.entity]
+      );
+
+      await db.sync_outbox.where('status').equals('syncing').modify({ status: 'pending' });
 
       for (const item of itemsToSync) {
         try {
           await db.sync_outbox.update(item.id, { status: 'syncing' });
 
           // Specifické volání pro platby (RPC s transakční kontrolou)
-          if (item.entity === 'payments' && item.action === 'insert') {
+          if (item.entity === 'payments' && item.payload.status === 'cancelled') {
+            const p = item.payload;
+            const { error: paymentError } = await supabase.rpc('process_payment', {
+              p_payment_id: item.id,
+              p_order_id: p.order_id,
+              p_amount_cents: p.amount_cents,
+              p_discount_cents: p.discount_cents || 0,
+              p_discount_percent: p.discount_percent || 0,
+              p_tip_amount_cents: p.tip_amount_cents || 0,
+              p_payment_method: p.payment_method,
+              p_paid_items: p.paid_items || [],
+            });
+            if (paymentError) throw paymentError;
+
+            const { error } = await supabase.rpc('cancel_payment', {
+              p_payment_id: item.id,
+              p_reason: String(item.payload.cancel_reason || 'Zrušeno obsluhou'),
+            });
+            if (error) throw error;
+          } else if (item.entity === 'payments' && item.action === 'insert') {
             const p = item.payload;
             const { error } = await supabase.rpc('process_payment', {
               p_payment_id: item.id,
@@ -246,6 +300,13 @@ export class SyncEngine {
               p_payment_method: p.payment_method,
               p_paid_items: p.paid_items || [],
             });
+            if (error) throw error;
+          } else if (item.action === 'delete') {
+            const { error } = await supabase
+              .from(item.entity)
+              .delete()
+              .eq('id', item.id);
+
             if (error) throw error;
           } else {
             // Standardní upsert s idempotentním id
@@ -277,6 +338,10 @@ export class SyncEngine {
         }
       }
 
+      if (!hasFailures) {
+        await this.pullFromSupabase();
+      }
+
       this.lastSyncTime = new Date();
       if (!hasFailures) {
         this.lastError = null;
@@ -289,6 +354,67 @@ export class SyncEngine {
       this.isProcessing = false;
       await this.updatePendingCount();
       this.notify();
+      if (this.isAuthenticated && this.isOnline && this.pendingCount > 0 && !this.lastError) {
+        setTimeout(() => {
+          void this.triggerSync();
+        }, 0);
+      }
+    }
+  }
+
+  private async fetchAll<T>(table: string): Promise<T[]> {
+    if (!supabase) throw new Error('Supabase není nakonfigurován.');
+
+    const pageSize = 1000;
+    const rows: T[] = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from(table)
+        .select('*')
+        .order('id')
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+
+      const page = (data ?? []) as T[];
+      rows.push(...page);
+      if (page.length < pageSize) return rows;
+    }
+  }
+
+  private async pullFromSupabase(): Promise<void> {
+    const [
+      categories,
+      products,
+      tables,
+      orders,
+      order_items,
+      order_item_events,
+      payments,
+      payment_events,
+    ] = await Promise.all([
+      this.fetchAll<Category>('categories'),
+      this.fetchAll<Product>('products'),
+      this.fetchAll<Table>('tables'),
+      this.fetchAll<Order>('orders'),
+      this.fetchAll<OrderItem>('order_items'),
+      this.fetchAll<OrderItemEvent>('order_item_events'),
+      this.fetchAll<Payment>('payments'),
+      this.fetchAll<PaymentEvent>('payment_events'),
+    ]);
+
+    const replaced = await replaceLocalDataFromCloud({
+      categories,
+      products,
+      tables,
+      orders,
+      order_items,
+      order_item_events,
+      payments,
+      payment_events,
+    } satisfies CloudSnapshot);
+
+    if (!replaced) {
+      console.info('[SyncEngine] Cloud pull skipped because local changes are waiting to sync.');
     }
   }
 }

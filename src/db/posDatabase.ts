@@ -11,6 +11,17 @@ import {
   SyncOutboxItem,
 } from '../domain/types';
 
+export interface CloudSnapshot {
+  categories: Category[];
+  products: Product[];
+  tables: Table[];
+  orders: Order[];
+  order_items: OrderItem[];
+  order_item_events: OrderItemEvent[];
+  payments: Payment[];
+  payment_events: PaymentEvent[];
+}
+
 export class PosDatabase extends Dexie {
   categories!: DexieTable<Category, string>;
   products!: DexieTable<Product, string>;
@@ -37,6 +48,52 @@ export class PosDatabase extends Dexie {
       sync_outbox: 'id, entity, action, status, created_at',
     });
   }
+}
+
+/**
+ * Replace the local cache with a complete server snapshot without discarding
+ * changes that were queued while the snapshot was being downloaded.
+ */
+export async function replaceLocalDataFromCloud(
+  snapshot: CloudSnapshot,
+  database: PosDatabase = db
+): Promise<boolean> {
+  return database.transaction('rw', [
+    database.categories,
+    database.products,
+    database.pos_tables,
+    database.orders,
+    database.order_items,
+    database.order_item_events,
+    database.payments,
+    database.payment_events,
+    database.sync_outbox,
+  ], async () => {
+    const pendingChanges = await database.sync_outbox
+      .where('status')
+      .anyOf(['pending', 'failed', 'syncing'])
+      .count();
+    if (pendingChanges > 0) return false;
+
+    await database.payment_events.clear();
+    await database.payments.clear();
+    await database.order_item_events.clear();
+    await database.order_items.clear();
+    await database.orders.clear();
+    await database.pos_tables.clear();
+    await database.products.clear();
+    await database.categories.clear();
+
+    await database.categories.bulkPut(snapshot.categories);
+    await database.products.bulkPut(snapshot.products);
+    await database.pos_tables.bulkPut(snapshot.tables);
+    await database.orders.bulkPut(snapshot.orders);
+    await database.order_items.bulkPut(snapshot.order_items);
+    await database.order_item_events.bulkPut(snapshot.order_item_events);
+    await database.payments.bulkPut(snapshot.payments);
+    await database.payment_events.bulkPut(snapshot.payment_events);
+    return true;
+  });
 }
 
 export const db = new PosDatabase();
