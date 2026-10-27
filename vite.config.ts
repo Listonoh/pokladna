@@ -5,6 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
 
 export default defineConfig({
+  base: process.env.BASE_PATH || (process.env.NODE_ENV === 'production' ? '/pokladna/' : '/'),
   plugins: [
     react(),
     VitePWA({
