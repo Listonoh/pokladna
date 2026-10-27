@@ -94,11 +94,15 @@ V případě nasazení se Supabase backendem:
    - Bezpečnostní **Row Level Security (RLS)** politiky.
    - Transakční PostgreSQL procedury `process_payment` a `cancel_payment`.
    Poté spusťte [`supabase/migrations/20261025_payment_discounts.sql`](supabase/migrations/20261025_payment_discounts.sql). U již nastavené databáze s textovými ID stačí spustit tento navazující skript.
+   Nakonec spusťte [`supabase/migrations/20261027_require_authenticated.sql`](supabase/migrations/20261027_require_authenticated.sql), která vyžaduje přihlášený Supabase účet pro přístup k databázi.
 3. Do souboru `.env` zadejte získanou URL a anonymní veřejný klíč:
    ```env
    VITE_SUPABASE_URL=https://vas-projekt.supabase.co
-   VITE_SUPABASE_ANON_KEY=vas-anon-klic
+   VITE_SUPABASE_PUBLISHABLE_KEY=vas-publishable-klic
    ```
+4. V Supabase otevřete **Authentication → Users** a vytvořte účty obsluhy. V aplikaci se obsluha přihlásí tlačítkem **Přihlásit** v horní liště; teprve poté se spustí synchronizace. Místní pokladna funguje i bez přihlášení a změny čekají v lokální frontě.
+
+V prohlížeči používejte pouze veřejný publishable/anon klíč, nikdy `service_role` secret key. Zabezpečení databáze zajišťují RLS politiky omezené na `authenticated`.
 
 ---
 

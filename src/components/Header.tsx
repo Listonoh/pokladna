@@ -3,6 +3,7 @@ import { Leaf, Wifi, WifiOff, RefreshCw, ShoppingCart, Truck, BarChart3, Setting
 import { syncEngine } from '../api/syncEngine';
 import { db } from '../db/posDatabase';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { SupabaseAuth } from './SupabaseAuth';
 
 export type ActiveTab = 'pos' | 'delivery' | 'reports' | 'admin';
 
@@ -142,6 +143,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
 
       {/* Stav sítě a synchronizace */}
       <div className="flex items-center space-x-3">
+        <SupabaseAuth />
         {syncState.isOnline ? (
           <div className="flex items-center space-x-1.5 text-xs bg-tea-700/50 px-2.5 py-1.5 rounded-lg border border-tea-600/50 text-tea-100">
             <Wifi className="w-3.5 h-3.5 text-emerald-400" />

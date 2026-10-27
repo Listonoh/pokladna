@@ -77,6 +77,7 @@ export function formatSyncError(err: unknown, entity?: string, action?: string):
 
 export class SyncEngine {
   public isProcessing = false;
+  public isAuthenticated = false;
   private listeners: Array<() => void> = [];
 
   public isOnline: boolean = typeof navigator !== 'undefined' ? navigator.onLine : true;
@@ -85,6 +86,18 @@ export class SyncEngine {
   public lastError: string | null = null;
 
   constructor() {
+    if (supabase) {
+      supabase.auth.onAuthStateChange((_event, session) => {
+        this.isAuthenticated = Boolean(session);
+        this.notify();
+        if (session) {
+          setTimeout(() => {
+            void this.triggerSync();
+          }, 0);
+        }
+      });
+    }
+
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
         this.isOnline = true;
@@ -202,6 +215,8 @@ export class SyncEngine {
       this.notify();
       return;
     }
+
+    if (!this.isAuthenticated) return;
 
     this.isProcessing = true;
     this.notify();
