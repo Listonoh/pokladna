@@ -280,6 +280,7 @@ export class SyncEngine {
               p_tip_amount_cents: p.tip_amount_cents || 0,
               p_payment_method: p.payment_method,
               p_paid_items: p.paid_items || [],
+              p_occurred_at: p.created_at,
             });
             if (paymentError) throw paymentError;
 
@@ -299,6 +300,7 @@ export class SyncEngine {
               p_tip_amount_cents: p.tip_amount_cents || 0,
               p_payment_method: p.payment_method,
               p_paid_items: p.paid_items || [],
+              p_occurred_at: p.created_at,
             });
             if (error) throw error;
           } else if (item.action === 'delete') {

@@ -1,15 +1,60 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, clearTransactionsOnly, resetEntireDatabase } from '../../db/posDatabase';
+import { createLocalBackup, parseLocalBackup, restoreLocalBackup } from '../../db/backup';
 import { syncEngine } from '../../api/syncEngine';
 import { generateUUID } from '../../domain/posService';
 import { Product, Category } from '../../domain/types';
 import { formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
-import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle, Download, Upload } from 'lucide-react';
 
 export const AdminView: React.FC = () => {
+  const backupFileInput = useRef<HTMLInputElement>(null);
   const categories: Category[] = useLiveQuery(() => db.categories.orderBy('sort_order').toArray()) ?? [];
   const products: Product[] = useLiveQuery(() => db.products.orderBy('sort_order').toArray()) ?? [];
+
+  const handleExportBackup = async () => {
+    try {
+      const backup = await createLocalBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `pokladna-zaloha-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      alert(`Zálohu se nepodařilo vytvořit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const handleImportBackup = async (file?: File) => {
+    if (!file) return;
+    if (syncEngine.isProcessing) {
+      alert('Obnovu nelze spustit během synchronizace. Počkejte na její dokončení.');
+      return;
+    }
+
+    try {
+      const backup = parseLocalBackup(await file.text());
+      const counts = Object.entries(backup.data)
+        .map(([table, rows]) => `${table}: ${rows.length}`)
+        .join('\n');
+      if (!window.confirm(
+        `Obnovit tuto zálohu do lokálního zařízení?\n\n${counts}\n\n` +
+        'Tím se nahradí všechna současná lokální data včetně čekající fronty synchronizace. ' +
+        'Obnova sama o sobě nic nezapisuje do cloudu, ale obnovené čekající změny se mohou synchronizovat později. Pokračovat?'
+      )) return;
+
+      await restoreLocalBackup(backup);
+      await syncEngine.updatePendingCount();
+      alert('Lokální data byla obnovena ze zálohy. Samotná obnova cloud nezměnila; čekající změny se mohou synchronizovat později.');
+    } catch (error) {
+      alert(`Zálohu se nepodařilo obnovit: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (backupFileInput.current) backupFileInput.current.value = '';
+    }
+  };
 
   // Editace / Vytvoření produktu modal
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
@@ -201,6 +246,42 @@ export const AdminView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+          {/* Záloha a obnova celé lokální databáze */}
+          <div className="bg-blue-50/60 rounded-xl p-4 border border-blue-200 flex flex-col justify-between">
+            <div className="space-y-1 mb-4">
+              <h4 className="text-xs font-bold text-blue-900 uppercase">Záloha / obnova lokálních dat</h4>
+              <p className="text-xs text-blue-800/80 leading-relaxed">
+                Záloha obsahuje celý lokální katalog, transakce, audit i frontu synchronizace. Obnova nahradí místní data; čekající změny se mohou synchronizovat později.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleExportBackup}
+                className="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-blue-200 text-ink-800 hover:bg-blue-100 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5 text-blue-700" />
+                <span>Stáhnout zálohu</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => backupFileInput.current?.click()}
+                disabled={syncEngine.isProcessing}
+                className="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-blue-200 text-ink-800 hover:bg-blue-100 transition-colors disabled:opacity-50"
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-700" />
+                <span>Obnovit ze souboru</span>
+              </button>
+              <input
+                ref={backupFileInput}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(event) => void handleImportBackup(event.target.files?.[0])}
+              />
+            </div>
+          </div>
+
           {/* 1. Smazat pouze transakce */}
           <div className="bg-parchment-50 rounded-xl p-4 border border-parchment-200 flex flex-col justify-between">
             <div className="space-y-1 mb-4">

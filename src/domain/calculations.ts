@@ -165,9 +165,13 @@ export function generateDailyReport(
   productsCategoryMap: Map<string, string>, // productId -> categoryId
   timeZone = 'Europe/Prague'
 ): DailyReportSummary {
-  // 1. Platby přijaté v daný den (dle data vytvoření platby)
+  // 1. Platby patří ke dni vytvoření objednávky, i když byla uzavřena později.
+  const dayOrders = allOrders.filter(
+    (o) => getLocalDateString(o.created_at, timeZone) === targetDate
+  );
+  const dayOrderIds = new Set(dayOrders.map((order) => order.id));
   const dayPayments = allPayments.filter((p) => {
-    return p.status === 'completed' && getLocalDateString(p.created_at, timeZone) === targetDate;
+    return p.status === 'completed' && dayOrderIds.has(p.order_id);
   });
 
   const normalSalesCashCents = dayPayments
@@ -194,9 +198,9 @@ export function generateDailyReport(
   const cardPaymentsCents = normalSalesCardCents + cardTipsCents;
   const totalPaymentsCents = cashPaymentsCents + cardPaymentsCents;
 
-  // 2. Položky prodané v daný den (dle vytvoření položky)
+  // 2. Položky patří ke dni vytvoření jejich objednávky.
   const dayItems = allItems.filter((item) => {
-    return item.delivery_status !== 'cancelled' && getLocalDateString(item.created_at, timeZone) === targetDate;
+    return item.delivery_status !== 'cancelled' && dayOrderIds.has(item.order_id);
   });
 
   const soldItemsValueCents = dayItems.reduce(
@@ -204,11 +208,7 @@ export function generateDailyReport(
     0
   );
 
-  // 3. Počty objednávek
-  const dayOrders = allOrders.filter(
-    (o) => getLocalDateString(o.created_at, timeZone) === targetDate
-  );
-
+  // 3. Počty objednávek vytvořených v daný den.
   const completedOrdersCount = dayOrders.filter((o) => o.status === 'paid').length;
   const openOrdersCount = dayOrders.filter((o) => o.status === 'open').length;
 

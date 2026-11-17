@@ -59,7 +59,12 @@ export const ReportsView: React.FC = () => {
 
   // Platby za vybraný den
   const dayPayments = payments
-    .filter((p) => getLocalDateString(p.created_at) === selectedDate)
+    .filter((p) => {
+      const order = ordersMap.get(p.order_id);
+      return order
+        ? getLocalDateString(order.created_at) === selectedDate
+        : getLocalDateString(p.created_at) === selectedDate;
+    })
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   // Filtrované platby pro tabulku
@@ -119,7 +124,7 @@ export const ReportsView: React.FC = () => {
     });
     csv += `\n`;
 
-    csv += `Detailní rozpis jednotlivých plateb a transakcí\n`;
+    csv += `Detailní rozpis plateb k objednávkám vytvořeným dne ${selectedDate}\n`;
     csv += `Čas;Účet;Stůl;Způsob;Zboží po slevě (Kč);Sleva (%);Sleva (Kč);Spropitné (Kč);Celkem (Kč);Stav;Položky\n`;
     dayPayments.forEach((p) => {
       const order = ordersMap.get(p.order_id);
@@ -179,7 +184,7 @@ export const ReportsView: React.FC = () => {
             Denní přehled a statistika tržeb
           </h2>
           <p className="text-xs text-ink-500 mt-0.5">
-            Evidence plateb, prodaných položek a spropitného v čase Europe/Prague
+            Objednávky, jejich položky a platby se přiřazují ke dni vytvoření objednávky (Europe/Prague), i když byla uhrazena později.
           </p>
         </div>
 
@@ -313,7 +318,7 @@ export const ReportsView: React.FC = () => {
               Detailní historie plateb a transakcí ({dayPayments.length})
             </h3>
             <p className="text-xs text-ink-500 mt-0.5">
-              Seznam všech realizovaných plateb za den {selectedDate}. Kliknutím na řádek můžete upravit způsob úhrady (karta / hotovost) či dýško.
+              Platby k objednávkám vytvořeným dne {selectedDate}, včetně později uzavřených účtů. Kliknutím na řádek můžete upravit způsob úhrady (karta / hotovost) či dýško.
             </p>
           </div>
 
@@ -392,7 +397,7 @@ export const ReportsView: React.FC = () => {
               <p className="font-semibold text-sm text-ink-600">Žádné platby k zobrazení</p>
               <p className="mt-1">
                 {dayPayments.length === 0
-                  ? 'V tento den nebyla zaúčtována žádná platba.'
+                  ? 'K objednávkám vytvořeným v tento den nebyla zaúčtována žádná platba.'
                   : 'Žádná platba neodpovídá zvolenému filtru nebo hledání.'}
               </p>
             </div>

@@ -439,8 +439,8 @@ describe('Pokladní systém - obchodní logika', () => {
     expect(events.some((e) => e.event_type === 'reverted_to_pending')).toBe(true);
   });
 
-  // 15. Správné vykázání plateb kolem půlnoci v Europe/Prague
-  it('15. Správné vykázání plateb kolem půlnočního předělu v časovém pásmu Europe/Prague', async () => {
+  // 15. Objednávka zůstává přiřazena dni vytvoření i po půlnočním uzavření.
+  it('15. Přiřadí objednávku i pozdější platbu ke dni vytvoření v Europe/Prague', async () => {
     const lateEveningPrague = '2026-10-14T21:55:00.000Z'; // v Praze 23:55
     const earlyMorningPrague = '2026-10-14T22:05:00.000Z'; // v Praze 00:05 další den (2026-10-15)
 
@@ -489,7 +489,8 @@ describe('Pokladní systém - obchodní logika', () => {
       prodCatMap
     );
     expect(report14.soldItemsValueCents).toBe(9500);
-    expect(report14.totalPaymentsCents).toBe(0);
+    expect(report14.totalPaymentsCents).toBe(9500);
+    expect(report14.completedOrdersCount).toBe(1);
 
     const report15 = generateDailyReport(
       '2026-10-15',
@@ -499,8 +500,8 @@ describe('Pokladní systém - obchodní logika', () => {
       categoriesMap,
       prodCatMap
     );
-    expect(report15.totalPaymentsCents).toBe(9500);
-    expect(report15.cardPaymentsCents).toBe(9500);
+    expect(report15.totalPaymentsCents).toBe(0);
+    expect(report15.completedOrdersCount).toBe(0);
     expect(report15.soldItemsValueCents).toBe(0);
   });
 
