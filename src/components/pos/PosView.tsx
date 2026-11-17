@@ -4,6 +4,7 @@ import { db } from '../../db/posDatabase';
 import { posService } from '../../domain/posService';
 import { Product, Order, OrderItem, PaymentMethod, PaymentItemDetail, DiscountPercent } from '../../domain/types';
 import { formatCents, calculateOrder, getLocalDateString } from '../../domain/calculations';
+import { getButtonColorClasses } from '../../domain/buttonColors';
 import { PaymentModal } from './PaymentModal';
 import { ItemNoteModal } from './ItemNoteModal';
 import { TransactionDetailModal } from './TransactionDetailModal';
@@ -342,7 +343,7 @@ export const PosView: React.FC = () => {
               className={`flex flex-col items-center justify-center px-4 py-1.5 rounded-xl text-xs font-semibold shrink-0 min-w-[120px] border transition-all ${
                 isSelected
                   ? 'bg-tea-700 text-white border-tea-800 shadow-md ring-2 ring-tea-600/40'
-                  : 'bg-white text-ink-800 border-parchment-300 hover:bg-parchment-50'
+                  : `${getButtonColorClasses(table.button_color)} text-ink-800`
               }`}
             >
               <span className="text-sm truncate w-full text-center">{table.name}</span>
@@ -385,7 +386,7 @@ export const PosView: React.FC = () => {
                     key={p.id}
                     type="button"
                     onClick={() => handleAddProduct(p)}
-                    className="p-3.5 bg-white border border-parchment-300 rounded-xl shadow-sm hover:border-tea-500 hover:bg-tea-50/50 active:scale-[0.98] transition-all text-left flex flex-col justify-between min-h-[82px]"
+                    className={`p-3.5 border rounded-xl shadow-sm hover:border-tea-500 active:scale-[0.98] transition-all text-left flex flex-col justify-between min-h-[82px] ${getButtonColorClasses(p.button_color)}`}
                   >
                     <span className="font-semibold text-ink-900 text-sm line-clamp-2 leading-snug">
                       {p.name}
@@ -436,7 +437,7 @@ export const PosView: React.FC = () => {
                   key={p.id}
                   type="button"
                   onClick={() => handleAddProduct(p)}
-                  className="p-3.5 bg-white border border-parchment-300 rounded-xl shadow-sm hover:border-tea-500 hover:bg-tea-50/40 active:scale-[0.98] transition-all text-left flex flex-col justify-between min-h-[82px]"
+                  className={`p-3.5 border rounded-xl shadow-sm hover:border-tea-500 active:scale-[0.98] transition-all text-left flex flex-col justify-between min-h-[82px] ${getButtonColorClasses(p.button_color)}`}
                 >
                   <div className="flex justify-between items-start gap-1">
                     <span className="font-semibold text-ink-900 text-sm line-clamp-2 leading-snug">

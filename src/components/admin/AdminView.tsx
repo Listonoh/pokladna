@@ -4,14 +4,16 @@ import { db, clearTransactionsOnly, resetEntireDatabase } from '../../db/posData
 import { createLocalBackup, parseLocalBackup, restoreLocalBackup } from '../../db/backup';
 import { syncEngine } from '../../api/syncEngine';
 import { generateUUID } from '../../domain/posService';
-import { Product, Category } from '../../domain/types';
+import { Product, Category, Table, ButtonColor } from '../../domain/types';
 import { formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
+import { BUTTON_COLORS } from '../../domain/buttonColors';
 import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle, Download, Upload } from 'lucide-react';
 
 export const AdminView: React.FC = () => {
   const backupFileInput = useRef<HTMLInputElement>(null);
   const categories: Category[] = useLiveQuery(() => db.categories.orderBy('sort_order').toArray()) ?? [];
   const products: Product[] = useLiveQuery(() => db.products.orderBy('sort_order').toArray()) ?? [];
+  const tables: Table[] = useLiveQuery(() => db.pos_tables.orderBy('sort_order').toArray()) ?? [];
 
   const handleExportBackup = async () => {
     try {
@@ -59,6 +61,7 @@ export const AdminView: React.FC = () => {
   // Editace / Vytvoření produktu modal
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [productPriceCzk, setProductPriceCzk] = useState<string>('');
+  const [editingTable, setEditingTable] = useState<Partial<Table> | null>(null);
 
   const handleOpenNewProduct = () => {
     setEditingProduct({
@@ -69,6 +72,7 @@ export const AdminView: React.FC = () => {
       is_favorite: false,
       sort_order: products.length + 1,
       is_active: true,
+      button_color: 'default',
     });
     setProductPriceCzk('95');
   };
@@ -92,6 +96,7 @@ export const AdminView: React.FC = () => {
       is_favorite: Boolean(editingProduct.is_favorite),
       sort_order: editingProduct.sort_order || 0,
       is_active: editingProduct.is_active ?? true,
+      button_color: editingProduct.button_color ?? 'default',
       created_at: editingProduct.created_at || now,
       updated_at: now,
     };
@@ -99,6 +104,33 @@ export const AdminView: React.FC = () => {
     await db.products.put(productData);
     await syncEngine.queueMutation('products', 'upsert', { ...productData }, productData.id);
     setEditingProduct(null);
+  };
+
+  const handleOpenNewTable = () => {
+    setEditingTable({
+      id: generateUUID(),
+      name: '',
+      sort_order: tables.length + 1,
+      is_active: true,
+      button_color: 'default',
+    });
+  };
+
+  const handleSaveTable = async () => {
+    if (!editingTable || !editingTable.name?.trim()) return;
+
+    const tableData: Table = {
+      id: editingTable.id || generateUUID(),
+      name: editingTable.name.trim(),
+      sort_order: editingTable.sort_order ?? tables.length + 1,
+      is_active: editingTable.is_active ?? true,
+      button_color: editingTable.button_color ?? 'default',
+      created_at: editingTable.created_at || new Date().toISOString(),
+    };
+
+    await db.pos_tables.put(tableData);
+    await syncEngine.queueMutation('tables', 'upsert', { ...tableData }, tableData.id);
+    setEditingTable(null);
   };
 
   const handleToggleActive = async (p: Product) => {
@@ -228,6 +260,45 @@ export const AdminView: React.FC = () => {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-parchment-300 shadow-sm overflow-hidden">
+        <div className="p-4 border-b border-parchment-200 bg-parchment-50 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-bold text-sm text-ink-800">Stoly ({tables.length})</h3>
+            <p className="text-xs text-ink-500 mt-0.5">Nastavte názvy a barvy tlačítek stolů na pokladní obrazovce.</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleOpenNewTable}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-tea-600 text-white text-xs font-bold hover:bg-tea-700"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Přidat stůl</span>
+          </button>
+        </div>
+        <div className="divide-y divide-parchment-200">
+          {tables.map((table) => (
+            <div key={table.id} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <span
+                  className={`w-6 h-6 rounded-md border shrink-0 ${BUTTON_COLORS.find((color) => color.value === (table.button_color ?? 'default'))?.swatchClass ?? BUTTON_COLORS[0].swatchClass}`}
+                  aria-label={`Barva: ${BUTTON_COLORS.find((color) => color.value === (table.button_color ?? 'default'))?.label ?? BUTTON_COLORS[0].label}`}
+                />
+                <span className="text-sm font-semibold text-ink-900 truncate">{table.name}</span>
+                {!table.is_active && <span className="text-xs text-ink-400">(neaktivní)</span>}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingTable({ ...table })}
+                className="p-2 rounded-lg border border-parchment-300 text-ink-600 hover:bg-parchment-100"
+                title="Upravit stůl"
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -427,6 +498,24 @@ export const AdminView: React.FC = () => {
                 />
               </div>
 
+              <div>
+                <label htmlFor="productColor" className="block text-xs font-bold text-ink-700 uppercase mb-1">
+                  Barva tlačítka
+                </label>
+                <select
+                  id="productColor"
+                  value={editingProduct.button_color ?? 'default'}
+                  onChange={(e) =>
+                    setEditingProduct({ ...editingProduct, button_color: e.target.value as ButtonColor })
+                  }
+                  className="w-full p-2.5 border border-parchment-300 rounded-xl text-sm font-semibold focus:border-tea-600 focus:outline-none bg-white"
+                >
+                  {BUTTON_COLORS.map((color) => (
+                    <option key={color.value} value={color.value}>{color.label}</option>
+                  ))}
+                </select>
+              </div>
+
               <div className="flex items-center space-x-2 pt-2">
                 <input
                   type="checkbox"
@@ -458,6 +547,65 @@ export const AdminView: React.FC = () => {
               >
                 <Check className="w-4 h-4" />
                 <span>Uložit produkt</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingTable && (
+        <div className="fixed inset-0 z-50 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl border border-parchment-300 p-6 max-w-md w-full space-y-4">
+            <div className="flex justify-between items-center border-b border-parchment-200 pb-3">
+              <h3 className="font-bold text-base text-ink-900">
+                {tables.some((table) => table.id === editingTable.id) ? 'Upravit stůl' : 'Nový stůl'}
+              </h3>
+              <button type="button" onClick={() => setEditingTable(null)} className="p-1 text-ink-400 hover:text-ink-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="tableName" className="block text-xs font-bold text-ink-700 uppercase mb-1">Název stolu</label>
+                <input
+                  id="tableName"
+                  type="text"
+                  value={editingTable.name ?? ''}
+                  onChange={(e) => setEditingTable({ ...editingTable, name: e.target.value })}
+                  className="w-full p-2.5 border border-parchment-300 rounded-xl text-sm font-semibold focus:border-tea-600 focus:outline-none"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label htmlFor="tableColor" className="block text-xs font-bold text-ink-700 uppercase mb-1">Barva tlačítka</label>
+                <select
+                  id="tableColor"
+                  value={editingTable.button_color ?? 'default'}
+                  onChange={(e) => setEditingTable({ ...editingTable, button_color: e.target.value as ButtonColor })}
+                  className="w-full p-2.5 border border-parchment-300 rounded-xl text-sm font-semibold focus:border-tea-600 focus:outline-none bg-white"
+                >
+                  {BUTTON_COLORS.map((color) => (
+                    <option key={color.value} value={color.value}>{color.label}</option>
+                  ))}
+                </select>
+              </div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-ink-800">
+                <input
+                  type="checkbox"
+                  checked={editingTable.is_active ?? true}
+                  onChange={(e) => setEditingTable({ ...editingTable, is_active: e.target.checked })}
+                  className="w-4 h-4 rounded text-tea-600 focus:ring-tea-500"
+                />
+                Zobrazit na pokladní obrazovce
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 pt-3 border-t border-parchment-200">
+              <button type="button" onClick={() => setEditingTable(null)} className="px-4 py-2 text-sm rounded-xl border border-parchment-300 text-ink-600 hover:bg-parchment-100">
+                Zrušit
+              </button>
+              <button type="button" onClick={handleSaveTable} disabled={!editingTable.name?.trim()} className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl bg-tea-600 text-white font-bold hover:bg-tea-700 shadow disabled:opacity-50">
+                <Check className="w-4 h-4" />
+                <span>Uložit stůl</span>
               </button>
             </div>
           </div>

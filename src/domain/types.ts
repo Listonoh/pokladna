@@ -3,6 +3,7 @@ export type DiscountPercent = 0 | 25 | 75;
 export type PaymentStatus = 'completed' | 'cancelled';
 export type OrderStatus = 'open' | 'paid' | 'cancelled';
 export type DeliveryStatus = 'pending' | 'delivered' | 'cancelled';
+export type ButtonColor = 'default' | 'gray' | 'red' | 'green' | 'yellow' | 'orange' | 'blue' | 'brown';
 
 export interface Category {
   id: string;
@@ -23,6 +24,7 @@ export interface Product {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  button_color?: ButtonColor;
 }
 
 export interface Table {
@@ -31,6 +33,7 @@ export interface Table {
   sort_order: number;
   is_active: boolean;
   created_at: string;
+  button_color?: ButtonColor;
 }
 
 export interface Order {

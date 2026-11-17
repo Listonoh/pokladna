@@ -142,6 +142,7 @@ export function parseLocalBackup(contents: string): LocalBackup {
       status: ['completed', 'cancelled'],
     },
   };
+  const allowedButtonColors = ['default', 'gray', 'red', 'green', 'yellow', 'orange', 'blue', 'brown'];
 
   for (const tableName of tableNames) {
     const rows = value.data[tableName];
@@ -155,6 +156,7 @@ export function parseLocalBackup(contents: string): LocalBackup {
             (field) => typeof row[field] === 'number' && Number.isFinite(row[field])
           ) &&
           (requiredBooleans[tableName] ?? []).every((field) => typeof row[field] === 'boolean') &&
+          (row.button_color === undefined || allowedButtonColors.includes(String(row.button_color))) &&
           Object.entries(allowedValues[tableName] ?? {}).every(([field, values]) =>
             values.includes(String(row[field]))
           )
