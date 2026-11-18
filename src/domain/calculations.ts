@@ -139,6 +139,12 @@ export interface DailyReportSummary {
   productBreakdown: Record<string, { productName: string; totalCents: number; itemsCount: number }>;
 }
 
+export interface MonthlyItemSummary {
+  productName: string;
+  itemsCount: number;
+  totalCents: number;
+}
+
 /**
  * Získá datum ve formátu YYYY-MM-DD pro zadané ISO datum v daném časovém pásmu (default Europe/Prague).
  */
@@ -153,6 +159,34 @@ export function getLocalDateString(isoDateStr: string, timeZone = 'Europe/Prague
   return formatter.format(d);
 }
 
+export function generateMonthlyItemReport(
+  targetMonth: string,
+  allItems: OrderItem[],
+  timeZone = 'Europe/Prague'
+): MonthlyItemSummary[] {
+  const products = new Map<string, MonthlyItemSummary>();
+
+  for (const item of allItems) {
+    if (
+      item.delivery_status === 'cancelled' ||
+      getLocalDateString(item.created_at, timeZone).slice(0, 7) !== targetMonth
+    ) {
+      continue;
+    }
+
+    const summary = products.get(item.product_name_snapshot) ?? {
+      productName: item.product_name_snapshot,
+      itemsCount: 0,
+      totalCents: 0,
+    };
+    summary.itemsCount += item.quantity;
+    summary.totalCents += item.unit_price_cents_snapshot * item.quantity;
+    products.set(item.product_name_snapshot, summary);
+  }
+
+  return [...products.values()].sort((a, b) => a.productName.localeCompare(b.productName, 'cs-CZ'));
+}
+
 /**
  * Sestaví denní report s oddělením tržeb za zboží, spropitného a platebních metod.
  */
@@ -165,14 +199,15 @@ export function generateDailyReport(
   productsCategoryMap: Map<string, string>, // productId -> categoryId
   timeZone = 'Europe/Prague'
 ): DailyReportSummary {
-  // 1. Platby patří ke dni vytvoření objednávky, i když byla uzavřena později.
+  // Payments and items belong to the day they were recorded, not the order's creation day.
   const dayOrders = allOrders.filter(
     (o) => getLocalDateString(o.created_at, timeZone) === targetDate
   );
-  const dayOrderIds = new Set(dayOrders.map((order) => order.id));
-  const dayPayments = allPayments.filter((p) => {
-    return p.status === 'completed' && dayOrderIds.has(p.order_id);
-  });
+  const dayPayments = allPayments.filter(
+    (payment) =>
+      payment.status === 'completed' &&
+      getLocalDateString(payment.created_at, timeZone) === targetDate
+  );
 
   const normalSalesCashCents = dayPayments
     .filter((p) => p.payment_method === 'cash')
@@ -198,10 +233,12 @@ export function generateDailyReport(
   const cardPaymentsCents = normalSalesCardCents + cardTipsCents;
   const totalPaymentsCents = cashPaymentsCents + cardPaymentsCents;
 
-  // 2. Položky patří ke dni vytvoření jejich objednávky.
-  const dayItems = allItems.filter((item) => {
-    return item.delivery_status !== 'cancelled' && dayOrderIds.has(item.order_id);
-  });
+  // Item sales belong to the day each item was added to the order.
+  const dayItems = allItems.filter(
+    (item) =>
+      item.delivery_status !== 'cancelled' &&
+      getLocalDateString(item.created_at, timeZone) === targetDate
+  );
 
   const soldItemsValueCents = dayItems.reduce(
     (sum, i) => sum + (i.unit_price_cents_snapshot * i.quantity),

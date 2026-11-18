@@ -11,7 +11,12 @@ import {
   PaymentItemDetail,
   DiscountPercent,
 } from './types';
-import { calculateDiscountCents, calculateOrder, validatePaymentAmount } from './calculations';
+import {
+  calculateDiscountCents,
+  calculateOrder,
+  getLocalDateString,
+  validatePaymentAmount,
+} from './calculations';
 
 /**
  * Generuje unikátní UUID v4 (kompatibilní v prohlížeči i Node).
@@ -44,8 +49,30 @@ export interface RecordPaymentOptions {
 }
 
 export class PosService {
+  private readonly orderDrafts = new Map<string, Order>();
+  private readonly tableDraftIds = new Map<string, string>();
+
+  private async createOrderDraft(tableId: string | null, rememberForTable: boolean): Promise<Order> {
+    const now = new Date().toISOString();
+
+    const draft: Order = {
+      id: generateUUID(),
+      table_id: tableId,
+      order_number: '...',
+      status: 'open',
+      created_at: now,
+      closed_at: null,
+    };
+
+    this.orderDrafts.set(draft.id, draft);
+    if (rememberForTable) {
+      this.tableDraftIds.set(tableId ?? '', draft.id);
+    }
+    return draft;
+  }
+
   /**
-   * Získá existující otevřenou objednávku pro stůl, nebo vytvoří novou.
+   * Získá existující otevřenou objednávku pro stůl, nebo připraví neuložený návrh.
    * Pro stůl null (S sebou) vrátí existující neuzavřenou objednávku s sebou,
    * pokud existuje, aby se nevytvářely duplicity, dokud není předchozí uzavřena.
    */
@@ -67,46 +94,18 @@ export class PosService {
       }
     }
 
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const todayOrdersCount = await db.orders
-      .filter((o) => o.created_at.startsWith(todayStr))
-      .count();
+    const draftId = this.tableDraftIds.get(tableId ?? '');
+    const existingDraft = draftId ? this.orderDrafts.get(draftId) : undefined;
+    if (existingDraft) return existingDraft;
 
-    const newOrder: Order = {
-      id: generateUUID(),
-      table_id: tableId,
-      order_number: generateOrderNumber(todayOrdersCount),
-      status: 'open',
-      created_at: new Date().toISOString(),
-      closed_at: null,
-    };
-
-    await db.orders.add(newOrder);
-    await syncEngine.queueMutation('orders', 'insert', { ...newOrder }, newOrder.id);
-    return newOrder;
+    return this.createOrderDraft(tableId, true);
   }
 
   /**
-   * Vytvoří novou objednávku S sebou (table_id: null).
+   * Připraví novou neuloženou objednávku S sebou.
    */
   async createNewTakeoutOrder(): Promise<Order> {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const todayOrdersCount = await db.orders
-      .filter((o) => o.created_at.startsWith(todayStr))
-      .count();
-
-    const newOrder: Order = {
-      id: generateUUID(),
-      table_id: null,
-      order_number: generateOrderNumber(todayOrdersCount),
-      status: 'open',
-      created_at: new Date().toISOString(),
-      closed_at: null,
-    };
-
-    await db.orders.add(newOrder);
-    await syncEngine.queueMutation('orders', 'insert', { ...newOrder }, newOrder.id);
-    return newOrder;
+    return this.createOrderDraft(null, false);
   }
 
   /**
@@ -119,14 +118,34 @@ export class PosService {
     note?: string
   ): Promise<OrderItem> {
     const normalizedNote = note?.trim() || undefined;
-
-    // Pokud už existuje stejný produkt se stejnou poznámkou a čeká na doručení, zvýšíme množství
-    const existing = await db.order_items
-      .where({ order_id: orderId, product_id: product.id })
-      .filter((i) => i.delivery_status === 'pending' && (i.note || undefined) === normalizedNote)
-      .first();
-
+    const order = await db.orders.get(orderId);
+    const draft = order ? undefined : this.orderDrafts.get(orderId);
+    if (!order && !draft) {
+      throw new Error('Objednávka nebyla nalezena.');
+    }
     const now = new Date().toISOString();
+    const orderToPersist = draft
+      ? {
+          ...draft,
+          order_number: generateOrderNumber(
+            await db.orders.filter((candidate) => candidate.created_at.startsWith(now.slice(0, 10))).count()
+          ),
+          created_at: now,
+        }
+      : undefined;
+
+    // Merge additions only within the same local day so later orders retain their own date.
+    const existing = orderToPersist
+      ? undefined
+      : await db.order_items
+          .where({ order_id: orderId, product_id: product.id })
+          .filter(
+            (i) =>
+              i.delivery_status === 'pending' &&
+              (i.note || undefined) === normalizedNote &&
+              getLocalDateString(i.created_at) === getLocalDateString(now)
+          )
+          .first();
 
     if (existing) {
       const updatedQuantity = existing.quantity + quantity;
@@ -167,8 +186,6 @@ export class PosService {
       updated_at: now,
     };
 
-    await db.order_items.add(newItem);
-
     const event: OrderItemEvent = {
       id: generateUUID(),
       order_item_id: newItem.id,
@@ -176,7 +193,26 @@ export class PosService {
       payload: { quantity, priceCents: product.price_cents },
       created_at: now,
     };
-    await db.order_item_events.add(event);
+
+    if (orderToPersist) {
+      await db.transaction(
+        'rw',
+        [db.orders, db.order_items, db.order_item_events],
+        async () => {
+          await db.orders.add(orderToPersist);
+          await db.order_items.add(newItem);
+          await db.order_item_events.add(event);
+        }
+      );
+      this.orderDrafts.delete(orderId);
+      if (this.tableDraftIds.get(orderToPersist.table_id ?? '') === orderId) {
+        this.tableDraftIds.delete(orderToPersist.table_id ?? '');
+      }
+      await syncEngine.queueMutation('orders', 'insert', { ...orderToPersist }, orderToPersist.id);
+    } else {
+      await db.order_items.add(newItem);
+      await db.order_item_events.add(event);
+    }
 
     await syncEngine.queueMutation('order_items', 'insert', { ...newItem }, newItem.id);
     await syncEngine.queueMutation('order_item_events', 'insert', { ...event }, event.id);
@@ -577,7 +613,14 @@ export class PosService {
    */
   async cancelOrder(orderId: string, reason = 'Zrušeno obsluhou'): Promise<void> {
     const order = await db.orders.get(orderId);
-    if (!order) return;
+    if (!order) {
+      const draft = this.orderDrafts.get(orderId);
+      this.orderDrafts.delete(orderId);
+      if (draft && this.tableDraftIds.get(draft.table_id ?? '') === orderId) {
+        this.tableDraftIds.delete(draft.table_id ?? '');
+      }
+      return;
+    }
 
     const itemsCount = await db.order_items.where({ order_id: orderId }).count();
     const paymentsCount = await db.payments.where({ order_id: orderId }).count();

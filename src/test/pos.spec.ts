@@ -5,6 +5,7 @@ import { Product } from '../domain/types';
 import {
   calculateOrder,
   generateDailyReport,
+  generateMonthlyItemReport,
   formatCents,
   getLocalDateString,
 } from '../domain/calculations';
@@ -135,9 +136,11 @@ describe('Pokladní systém - obchodní logika', () => {
   it('1. Přidání produktu k novému účtu vytvoří snapshot ceny a názvu', async () => {
     const table = (await db.pos_tables.toArray())[0];
     const order = await posService.getOrCreateOrderForTable(table.id);
+    expect(await db.orders.get(order.id)).toBeUndefined();
 
     const item = await posService.addItemToOrder(order.id, sampleProduct1, 1);
 
+    expect(await db.orders.get(order.id)).toBeDefined();
     expect(item.order_id).toBe(order.id);
     expect(item.product_id).toBe(sampleProduct1.id);
     expect(item.product_name_snapshot).toBe(sampleProduct1.name);
@@ -149,6 +152,26 @@ describe('Pokladní systém - obchodní logika', () => {
     const events = await db.order_item_events.where({ order_item_id: item.id }).toArray();
     expect(events.length).toBe(1);
     expect(events[0].event_type).toBe('created');
+  });
+
+  it('creates a new dated item row when the same product is added on a later day', async () => {
+    const order = await posService.getOrCreateOrderForTable(null);
+    const firstItem = await posService.addItemToOrder(order.id, sampleProduct1, 1);
+    const previousMonth = new Date();
+    previousMonth.setDate(1);
+    previousMonth.setMonth(previousMonth.getMonth() - 1);
+    previousMonth.setDate(15);
+    previousMonth.setHours(12, 0, 0, 0);
+    await db.order_items.update(firstItem.id, {
+      created_at: previousMonth.toISOString(),
+    });
+
+    await posService.addItemToOrder(order.id, sampleProduct1, 1);
+
+    const items = await db.order_items.where({ order_id: order.id }).toArray();
+    expect(items).toHaveLength(2);
+    expect(items[0].quantity).toBe(1);
+    expect(items[1].quantity).toBe(1);
   });
 
   // 2. Opakované přidání produktu
@@ -439,8 +462,8 @@ describe('Pokladní systém - obchodní logika', () => {
     expect(events.some((e) => e.event_type === 'reverted_to_pending')).toBe(true);
   });
 
-  // 15. Objednávka zůstává přiřazena dni vytvoření i po půlnočním uzavření.
-  it('15. Přiřadí objednávku i pozdější platbu ke dni vytvoření v Europe/Prague', async () => {
+  // 15. Platby a položky se přiřazují ke dni jejich zaznamenání.
+  it('15. Přiřadí platbu podle času platby a položky podle času objednání v Europe/Prague', async () => {
     const lateEveningPrague = '2026-10-14T21:55:00.000Z'; // v Praze 23:55
     const earlyMorningPrague = '2026-10-14T22:05:00.000Z'; // v Praze 00:05 další den (2026-10-15)
 
@@ -489,7 +512,7 @@ describe('Pokladní systém - obchodní logika', () => {
       prodCatMap
     );
     expect(report14.soldItemsValueCents).toBe(9500);
-    expect(report14.totalPaymentsCents).toBe(9500);
+    expect(report14.totalPaymentsCents).toBe(0);
     expect(report14.completedOrdersCount).toBe(1);
 
     const report15 = generateDailyReport(
@@ -500,9 +523,54 @@ describe('Pokladní systém - obchodní logika', () => {
       categoriesMap,
       prodCatMap
     );
-    expect(report15.totalPaymentsCents).toBe(0);
+    expect(report15.totalPaymentsCents).toBe(9500);
     expect(report15.completedOrdersCount).toBe(0);
     expect(report15.soldItemsValueCents).toBe(0);
+  });
+
+  it('generates monthly item totals from the item-added date and excludes cancelled items', () => {
+    const report = generateMonthlyItemReport('2026-11', [
+      {
+        id: 'item-november-a',
+        order_id: 'order',
+        product_id: sampleProduct1.id,
+        product_name_snapshot: 'Sencha',
+        unit_price_cents_snapshot: 9500,
+        quantity: 2,
+        paid_quantity: 0,
+        delivery_status: 'pending',
+        created_at: '2026-10-31T23:30:00.000Z',
+        updated_at: '2026-10-31T23:30:00.000Z',
+      },
+      {
+        id: 'item-november-cancelled',
+        order_id: 'order',
+        product_id: sampleProduct1.id,
+        product_name_snapshot: 'Sencha',
+        unit_price_cents_snapshot: 9500,
+        quantity: 5,
+        paid_quantity: 0,
+        delivery_status: 'cancelled',
+        created_at: '2026-11-02T12:00:00.000Z',
+        updated_at: '2026-11-02T12:00:00.000Z',
+      },
+      {
+        id: 'item-october',
+        order_id: 'order',
+        product_id: sampleProduct2.id,
+        product_name_snapshot: 'Mochi',
+        unit_price_cents_snapshot: 5500,
+        quantity: 1,
+        paid_quantity: 0,
+        delivery_status: 'pending',
+        created_at: '2026-10-20T12:00:00.000Z',
+        updated_at: '2026-10-20T12:00:00.000Z',
+      },
+    ]);
+
+    expect(report).toEqual([
+      { productName: 'Sencha', itemsCount: 2, totalCents: 19000 },
+    ]);
   });
 
   // 16. Obnova dat po obnovení stránky
@@ -665,7 +733,7 @@ describe('Pokladní systém - obchodní logika', () => {
     // 2. Opětovné zavolání getOrCreateOrderForTable(null) musí vrátit tutéž neuzavřenou objednávku
     const reopenedTakeout = await posService.getOrCreateOrderForTable(null);
     expect(reopenedTakeout.id).toBe(takeout1.id);
-    expect(reopenedTakeout.order_number).toBe(takeout1.order_number);
+    expect(reopenedTakeout.order_number).toBe((await db.orders.get(takeout1.id))?.order_number);
 
     // 3. Objednávku zaplatíme v plné výši -> status přejde do 'paid'
     await posService.recordPayment(takeout1.id, sampleProduct1.price_cents, 'cash');

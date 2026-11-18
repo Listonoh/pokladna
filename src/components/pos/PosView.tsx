@@ -71,6 +71,13 @@ export const PosView: React.FC = () => {
         const order = await db.orders.get(selectedTakeoutOrderId);
         if (order && order.status === 'open' && !isCancelled) {
           setCurrentOrder(order);
+        } else if (
+          !order &&
+          currentOrder?.id === selectedTakeoutOrderId &&
+          currentOrder.status === 'open' &&
+          !isCancelled
+        ) {
+          // A selected takeout order without items exists only as an in-memory draft.
         } else if (!isCancelled) {
           const fallbackOrder = await posService.getOrCreateOrderForTable(null);
           setSelectedTakeoutOrderId(fallbackOrder.id);
@@ -113,6 +120,8 @@ export const PosView: React.FC = () => {
   const handleAddProduct = async (product: Product) => {
     if (!currentOrder) return;
     await posService.addItemToOrder(currentOrder.id, product, 1);
+    const persistedOrder = await db.orders.get(currentOrder.id);
+    if (persistedOrder) setCurrentOrder(persistedOrder);
   };
 
   // Zpracování platby s dýškem

@@ -7,6 +7,7 @@ import {
   getLocalDateString,
 } from '../../domain/calculations';
 import { TransactionDetailModal } from '../pos/TransactionDetailModal';
+import { MonthlyItemsReport } from './MonthlyItemsReport';
 import {
   Calendar,
   Banknote,
@@ -57,14 +58,9 @@ export const ReportsView: React.FC = () => {
     productsCategoryMap
   );
 
-  // Platby za vybraný den
+  // Platby za vybraný den jsou přiřazeny podle času platby, nikoli založení účtu.
   const dayPayments = payments
-    .filter((p) => {
-      const order = ordersMap.get(p.order_id);
-      return order
-        ? getLocalDateString(order.created_at) === selectedDate
-        : getLocalDateString(p.created_at) === selectedDate;
-    })
+    .filter((p) => getLocalDateString(p.created_at) === selectedDate)
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   // Filtrované platby pro tabulku
@@ -124,7 +120,7 @@ export const ReportsView: React.FC = () => {
     });
     csv += `\n`;
 
-    csv += `Detailní rozpis plateb k objednávkám vytvořeným dne ${selectedDate}\n`;
+    csv += `Detailní rozpis plateb přijatých dne ${selectedDate}\n`;
     csv += `Čas;Účet;Stůl;Způsob;Zboží po slevě (Kč);Sleva (%);Sleva (Kč);Spropitné (Kč);Celkem (Kč);Stav;Položky\n`;
     dayPayments.forEach((p) => {
       const order = ordersMap.get(p.order_id);
@@ -184,7 +180,7 @@ export const ReportsView: React.FC = () => {
             Denní přehled a statistika tržeb
           </h2>
           <p className="text-xs text-ink-500 mt-0.5">
-            Objednávky, jejich položky a platby se přiřazují ke dni vytvoření objednávky (Europe/Prague), i když byla uhrazena později.
+            Platby se přiřazují ke dni přijetí a položky ke dni přidání do účtu (Europe/Prague).
           </p>
         </div>
 
@@ -318,7 +314,7 @@ export const ReportsView: React.FC = () => {
               Detailní historie plateb a transakcí ({dayPayments.length})
             </h3>
             <p className="text-xs text-ink-500 mt-0.5">
-              Platby k objednávkám vytvořeným dne {selectedDate}, včetně později uzavřených účtů. Kliknutím na řádek můžete upravit způsob úhrady (karta / hotovost) či dýško.
+              Platby přijaté dne {selectedDate}. Kliknutím na řádek můžete upravit způsob úhrady (karta / hotovost) či dýško.
             </p>
           </div>
 
@@ -397,7 +393,7 @@ export const ReportsView: React.FC = () => {
               <p className="font-semibold text-sm text-ink-600">Žádné platby k zobrazení</p>
               <p className="mt-1">
                 {dayPayments.length === 0
-                  ? 'K objednávkám vytvořeným v tento den nebyla zaúčtována žádná platba.'
+                  ? 'V tento den nebyla zaúčtována žádná platba.'
                   : 'Žádná platba neodpovídá zvolenému filtru nebo hledání.'}
               </p>
             </div>
@@ -614,6 +610,7 @@ export const ReportsView: React.FC = () => {
         onClose={() => setSelectedPaymentIdForDetail(null)}
         paymentId={selectedPaymentIdForDetail}
       />
+      <MonthlyItemsReport />
     </div>
   );
 };
