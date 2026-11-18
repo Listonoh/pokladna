@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, clearTransactionsOnly, resetEntireDatabase } from '../../db/posDatabase';
 import { createLocalBackup, parseLocalBackup, restoreLocalBackup } from '../../db/backup';
@@ -7,7 +7,10 @@ import { generateUUID } from '../../domain/posService';
 import { Product, Category, Table, ButtonColor } from '../../domain/types';
 import { formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
 import { BUTTON_COLORS } from '../../domain/buttonColors';
-import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle, Download, Upload } from 'lucide-react';
+import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle, Download, Upload, ArrowUpDown } from 'lucide-react';
+
+type ProductSortKey = 'favorite' | 'name' | 'category' | 'price' | 'color' | 'active';
+type ProductSort = { key: ProductSortKey; direction: 'asc' | 'desc' };
 
 export const AdminView: React.FC = () => {
   const backupFileInput = useRef<HTMLInputElement>(null);
@@ -62,6 +65,73 @@ export const AdminView: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [productPriceCzk, setProductPriceCzk] = useState<string>('');
   const [editingTable, setEditingTable] = useState<Partial<Table> | null>(null);
+  const [productSort, setProductSort] = useState<ProductSort>({ key: 'category', direction: 'asc' });
+
+  const sortedProducts = useMemo(() => {
+    const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+    const colorLabels = new Map(BUTTON_COLORS.map((color) => [color.value, color.label]));
+    const direction = productSort.direction === 'asc' ? 1 : -1;
+
+    return [...products].sort((a, b) => {
+      let comparison = 0;
+      switch (productSort.key) {
+        case 'favorite':
+          comparison = Number(b.is_favorite) - Number(a.is_favorite);
+          break;
+        case 'name':
+          comparison = a.name.localeCompare(b.name, 'cs-CZ');
+          break;
+        case 'category':
+          comparison = (categoryNames.get(a.category_id) || 'Bez kategorie').localeCompare(
+            categoryNames.get(b.category_id) || 'Bez kategorie',
+            'cs-CZ'
+          );
+          break;
+        case 'price':
+          comparison = a.price_cents - b.price_cents;
+          break;
+        case 'color':
+          comparison = (colorLabels.get(a.button_color ?? 'default') || '').localeCompare(
+            colorLabels.get(b.button_color ?? 'default') || '',
+            'cs-CZ'
+          );
+          break;
+        case 'active':
+          comparison = Number(b.is_active) - Number(a.is_active);
+          break;
+      }
+
+      if (comparison === 0) comparison = a.name.localeCompare(b.name, 'cs-CZ');
+      return comparison * direction;
+    });
+  }, [categories, products, productSort]);
+
+  const handleProductSort = (key: ProductSortKey) => {
+    setProductSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+    }));
+  };
+
+  const renderSortHeader = (key: ProductSortKey, label: string) => (
+    <th
+      className="py-3 px-4"
+      aria-sort={
+        productSort.key === key
+          ? productSort.direction === 'asc' ? 'ascending' : 'descending'
+          : 'none'
+      }
+    >
+      <button
+        type="button"
+        onClick={() => handleProductSort(key)}
+        className="inline-flex items-center gap-1.5 hover:text-ink-800"
+      >
+        {label}
+        <ArrowUpDown className="w-3.5 h-3.5" aria-hidden="true" />
+      </button>
+    </th>
+  );
 
   const handleOpenNewProduct = () => {
     setEditingProduct({
@@ -185,17 +255,20 @@ export const AdminView: React.FC = () => {
           <table className="w-full text-left border-collapse text-sm min-w-[600px]">
             <thead>
               <tr className="bg-parchment-100/60 border-b border-parchment-200 text-xs font-semibold text-ink-500 uppercase">
-                <th className="py-3 px-4 w-12 text-center">Oblíbené</th>
-                <th className="py-3 px-4">Název</th>
-                <th className="py-3 px-4">Kategorie</th>
-                <th className="py-3 px-4">Prodejní cena</th>
-                <th className="py-3 px-4">Stav</th>
+                {renderSortHeader('favorite', 'Oblíbené')}
+                {renderSortHeader('name', 'Název')}
+                {renderSortHeader('category', 'Kategorie')}
+                {renderSortHeader('price', 'Prodejní cena')}
+                {renderSortHeader('color', 'Barva')}
+                {renderSortHeader('active', 'Stav')}
                 <th className="py-3 px-4 text-right">Akce</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-parchment-200">
-              {products.map((p: Product) => {
+              {sortedProducts.map((p: Product) => {
                 const category = categories.find((c: Category) => c.id === p.category_id);
+                const buttonColor = BUTTON_COLORS.find((color) => color.value === (p.button_color ?? 'default'))
+                  ?? BUTTON_COLORS[0];
                 return (
                   <tr
                     key={p.id}
@@ -203,7 +276,7 @@ export const AdminView: React.FC = () => {
                       !p.is_active ? 'opacity-50 bg-parchment-100/40' : ''
                     }`}
                   >
-                    <td className="py-3 px-4 text-center">
+                    <td className="py-3 px-4 w-12 text-center">
                       <button
                         type="button"
                         onClick={() => handleToggleFavorite(p)}
@@ -225,6 +298,13 @@ export const AdminView: React.FC = () => {
                     </td>
                     <td className="py-3 px-4 font-bold text-tea-700">
                       {formatCents(p.price_cents)}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span
+                        className={`inline-block w-6 h-6 rounded-md border align-middle ${buttonColor.swatchClass}`}
+                        title={buttonColor.label}
+                        aria-label={`Barva tlačítka: ${buttonColor.label}`}
+                      />
                     </td>
                     <td className="py-3 px-4">
                       {p.is_active ? (

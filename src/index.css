@@ -21,7 +21,14 @@ html, body {
 /* Plynulý touch scroll na iOS a Androidu */
 .overflow-y-auto, .overflow-x-auto {
   -webkit-overflow-scrolling: touch;
+}
+
+.overflow-y-auto {
   touch-action: pan-y;
+}
+
+.overflow-x-auto {
+  touch-action: pan-x pan-y;
 }
 
 /* Vyloučení šedého zvýraznění při klepnutí */
