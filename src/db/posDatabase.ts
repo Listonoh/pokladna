@@ -56,7 +56,8 @@ export class PosDatabase extends Dexie {
  */
 export async function replaceLocalDataFromCloud(
   snapshot: CloudSnapshot,
-  database: PosDatabase = db
+  database: PosDatabase = db,
+  discardPendingChanges = false
 ): Promise<boolean> {
   return database.transaction('rw', [
     database.categories,
@@ -73,7 +74,11 @@ export async function replaceLocalDataFromCloud(
       .where('status')
       .anyOf(['pending', 'failed', 'syncing'])
       .count();
-    if (pendingChanges > 0) return false;
+    if (pendingChanges > 0 && !discardPendingChanges) return false;
+
+    if (discardPendingChanges) {
+      await database.sync_outbox.clear();
+    }
 
     await database.payment_events.clear();
     await database.payments.clear();

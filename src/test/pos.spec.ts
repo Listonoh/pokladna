@@ -121,6 +121,25 @@ describe('Pokladní systém - obchodní logika', () => {
     expect(await db.categories.get('cat-teas')).toBeDefined();
   });
 
+  it('replaces local data and clears queued changes when explicitly discarding local changes', async () => {
+    await syncEngine.queueMutation('orders', 'insert', { id: 'pending-order' }, 'pending-order');
+
+    const replaced = await replaceLocalDataFromCloud({
+      categories: [],
+      products: [],
+      tables: [],
+      orders: [],
+      order_items: [],
+      order_item_events: [],
+      payments: [],
+      payment_events: [],
+    }, db, true);
+
+    expect(replaced).toBe(true);
+    expect(await db.sync_outbox.count()).toBe(0);
+    expect(await db.categories.count()).toBe(0);
+  });
+
   it('keeps cancelled order items and their audit event for synchronization', async () => {
     const order = await posService.getOrCreateOrderForTable(null);
     const item = await posService.addItemToOrder(order.id, sampleProduct1);

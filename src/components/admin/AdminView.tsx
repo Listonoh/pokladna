@@ -3,11 +3,12 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db, clearTransactionsOnly, resetEntireDatabase } from '../../db/posDatabase';
 import { createLocalBackup, parseLocalBackup, restoreLocalBackup } from '../../db/backup';
 import { syncEngine } from '../../api/syncEngine';
+import { isSupabaseConfigured } from '../../api/supabaseClient';
 import { generateUUID } from '../../domain/posService';
 import { Product, Category, Table, ButtonColor } from '../../domain/types';
 import { formatCents, czkToCents, centsToCzk } from '../../domain/calculations';
 import { BUTTON_COLORS } from '../../domain/buttonColors';
-import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle, Download, Upload, ArrowUpDown } from 'lucide-react';
+import { Plus, Edit2, Star, Check, X, Eye, EyeOff, Trash2, Database, RotateCcw, AlertTriangle, Download, Upload, ArrowUpDown, CloudDownload } from 'lucide-react';
 
 type ProductSortKey = 'favorite' | 'name' | 'category' | 'price' | 'color' | 'active';
 type ProductSort = { key: ProductSortKey; direction: 'asc' | 'desc' };
@@ -30,6 +31,24 @@ export const AdminView: React.FC = () => {
       setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) {
       alert(`Zálohu se nepodařilo vytvořit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const handleReloadFromSupabase = async () => {
+    if (!window.confirm(
+      'POZOR: Tato akce nahradí všechna lokální data aktuálním obsahem Supabase. ' +
+      'Lokální změny, které ještě nebyly synchronizovány, budou trvale zahozeny. ' +
+      'Před pokračováním si stáhněte zálohu lokální databáze. Pokračovat?'
+    )) return;
+
+    setIsReloadingFromCloud(true);
+    try {
+      await syncEngine.reloadFromSupabaseDiscardingLocalChanges();
+      alert('Lokální databáze byla nahrazena daty ze Supabase.');
+    } catch (error) {
+      alert(`Načtení dat ze Supabase se nezdařilo: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsReloadingFromCloud(false);
     }
   };
 
@@ -65,6 +84,7 @@ export const AdminView: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [productPriceCzk, setProductPriceCzk] = useState<string>('');
   const [editingTable, setEditingTable] = useState<Partial<Table> | null>(null);
+  const [isReloadingFromCloud, setIsReloadingFromCloud] = useState(false);
   const [productSort, setProductSort] = useState<ProductSort>({ key: 'category', direction: 'asc' });
 
   const sortedProducts = useMemo(() => {
@@ -396,7 +416,7 @@ export const AdminView: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 pt-1">
           {/* Záloha a obnova celé lokální databáze */}
           <div className="bg-blue-50/60 rounded-xl p-4 border border-blue-200 flex flex-col justify-between">
             <div className="space-y-1 mb-4">
@@ -431,6 +451,33 @@ export const AdminView: React.FC = () => {
                 onChange={(event) => void handleImportBackup(event.target.files?.[0])}
               />
             </div>
+          </div>
+
+          {/* Načíst vzdálenou databázi a zahodit lokální změny */}
+          <div className="bg-rose-50/50 rounded-xl p-4 border border-rose-200 flex flex-col justify-between">
+            <div className="space-y-1 mb-4">
+              <h4 className="text-xs font-bold text-rose-900 uppercase">Načíst databázi ze Supabase</h4>
+              <p className="text-xs text-rose-700/80 leading-relaxed">
+                Nahradí celý místní katalog, stoly, účty, platby i frontu synchronizace daty z cloudu.
+                Neodeslané místní změny budou zahozeny. Nejprve si stáhněte lokální zálohu.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleReloadFromSupabase()}
+              disabled={!isSupabaseConfigured || !syncEngine.isOnline || syncEngine.isProcessing || isReloadingFromCloud}
+              className="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-600 text-white hover:bg-rose-700 shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title={
+                !isSupabaseConfigured
+                  ? 'Supabase není nakonfigurován'
+                  : !syncEngine.isOnline
+                    ? 'Pro načtení je potřeba připojení k internetu'
+                    : undefined
+              }
+            >
+              <CloudDownload className="w-3.5 h-3.5" />
+              <span>{isReloadingFromCloud ? 'Načítám…' : 'Zahodit místní a načíst cloud'}</span>
+            </button>
           </div>
 
           {/* 1. Smazat pouze transakce */}

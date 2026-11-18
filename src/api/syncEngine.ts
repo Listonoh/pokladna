@@ -196,6 +196,38 @@ export class SyncEngine {
     this.notify();
   }
 
+  public async reloadFromSupabaseDiscardingLocalChanges(): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) {
+      throw new Error('Supabase není nakonfigurován.');
+    }
+    if (!this.isOnline) {
+      throw new Error('Pro načtení dat ze Supabase je potřeba připojení k internetu.');
+    }
+    if (this.isProcessing) {
+      throw new Error('Načtení nelze spustit během synchronizace.');
+    }
+
+    this.isProcessing = true;
+    this.notify();
+    try {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (!session) throw new Error('Nejste přihlášeni k Supabase.');
+
+      this.isAuthenticated = true;
+      await this.pullFromSupabase(true);
+      this.lastError = null;
+      this.lastSyncTime = new Date();
+      await this.updatePendingCount();
+    } catch (error: unknown) {
+      this.lastError = formatSyncError(error);
+      throw new Error(this.lastError);
+    } finally {
+      this.isProcessing = false;
+      this.notify();
+    }
+  }
+
   /**
    * Spustí postupné zpracování fronty (FIFO).
    */
@@ -383,7 +415,7 @@ export class SyncEngine {
     }
   }
 
-  private async pullFromSupabase(): Promise<void> {
+  private async pullFromSupabase(discardPendingChanges = false): Promise<void> {
     const [
       categories,
       products,
@@ -413,7 +445,7 @@ export class SyncEngine {
       order_item_events,
       payments,
       payment_events,
-    } satisfies CloudSnapshot);
+    } satisfies CloudSnapshot, db, discardPendingChanges);
 
     if (!replaced) {
       console.info('[SyncEngine] Cloud pull skipped because local changes are waiting to sync.');
